@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,7 +49,10 @@ func logCapabilities(c config.Capabilities) {
 // Each accepted connection is wrapped in an IOTransport, connected to the
 // server via server.Connect (not the one-shot Run method), then drained with
 // ss.Wait() before accepting the next connection (D-10 sequential accept).
-func acceptLoop(ctx context.Context, ln net.Listener, server *mcp.Server) {
+//
+// activeSess is set to the current ServerSession for the duration of ss.Wait()
+// so that Run can call ss.Close() when the drain timeout fires (WR-01).
+func acceptLoop(ctx context.Context, ln net.Listener, server *mcp.Server, activeSess *atomic.Pointer[mcp.ServerSession]) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -66,10 +70,13 @@ func acceptLoop(ctx context.Context, ln net.Listener, server *mcp.Server) {
 			conn.Close()
 			continue
 		}
+		// Publish the active session so Run can close it on drain timeout.
+		activeSess.Store(ss)
 		// Block until this session ends — sequential per D-10.
 		if err := ss.Wait(); err != nil {
 			logger.Warn("session ended with error", "error", err)
 		}
+		activeSess.Store(nil)
 		conn.Close() // always close the underlying connection after session ends
 		logger.Info("client disconnected")
 	}
@@ -105,12 +112,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Startup log — includes socket path per §Specific Ideas.
 	logger.Info("daemon started", "mcp_socket", cfg.MCPSocket)
 
+	// activeSess holds the session currently blocked in ss.Wait(), if any.
+	// The accept loop stores/clears it around each session so that the drain
+	// timeout path below can call ss.Close() to unblock it (WR-01).
+	var activeSess atomic.Pointer[mcp.ServerSession]
+
 	// Run the accept loop in a goroutine so the main goroutine can service
 	// ctx.Done() without being blocked behind ss.Wait() (Pitfall 6).
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		acceptLoop(ctx, ln, server)
+		acceptLoop(ctx, ln, server, &activeSess)
 	}()
 
 	// Block until shutdown signal (SIGTERM/SIGINT via signal.NotifyContext).
@@ -126,7 +138,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	select {
 	case <-done:
 	case <-drainCtx.Done():
-		logger.Warn("drain timeout exceeded; forcing shutdown")
+		// Close the active session to unblock ss.Wait() in the accept loop.
+		// Without this, the goroutine would remain blocked until the client
+		// disconnects, even though Run has returned (WR-01).
+		if ss := activeSess.Load(); ss != nil {
+			ss.Close()
+		}
+		logger.Warn("drain timeout exceeded; closing active session")
 	}
 
 	// Remove the socket file so subsequent daemon starts do not fail with
