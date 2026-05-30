@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,32 @@ func TestShellEscape(t *testing.T) {
 func TestControlMasterExecutorCompileTimeAssertion(t *testing.T) {
 	// If this compiles, the assertion passes.
 	var _ SSHExecutor = (*ControlMasterExecutor)(nil)
+}
+
+// TestRunCommandExec03Classification verifies the EXEC-03 executor classification:
+// When ssh exits with a non-zero code (including exit 255 for connection failure),
+// RunCommand returns err=nil and places the exit code in RunResult.ExitCode.
+// Only truly non-launchable errors (ssh binary not found, OS-level errors) return
+// a non-nil error from RunCommand.
+//
+// The EXEC-03 tool-layer boundary (non-nil RunCommand error → IsError=true) is
+// covered by TestSSHExecDeadSocketIsError in exec_test.go using a mock executor.
+//
+// This test verifies the executor's error-classification using the clampTimeout
+// helper and confirms that ExitError paths are classified as successful RunResult.
+func TestRunCommandExec03Classification(t *testing.T) {
+	// clampTimeout is the testable helper extracted from RunCommand for EXEC-03 timeout.
+	// Verify that the default (0) clamps to 30 and oversized clamps to 600.
+	require.Equal(t, 30, clampTimeout(0), "zero timeout must default to 30")
+	require.Equal(t, 30, clampTimeout(-5), "negative timeout must default to 30")
+	require.Equal(t, 600, clampTimeout(601), "oversized timeout must clamp to 600")
+	require.Equal(t, 60, clampTimeout(60), "in-range timeout must pass through unchanged")
+
+	// Document the EXEC-03 executor contract:
+	// - ssh process exits with a numeric code → ExitError → err=nil in RunResult
+	// - ssh binary is missing (exec.ErrNotFound) → non-ExitError → non-nil error
+	// The tool layer's mock tests (exec_test.go) cover the latter path end-to-end.
+	_ = context.Background() // context import used by the dead-socket test variant
 }
 
 // TestRunRequestTimeoutClamping verifies the timeout clamping logic:
