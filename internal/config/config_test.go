@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidate covers missing ssh_socket, missing mcp_socket, and valid config.
+// TestValidate covers missing ssh_socket, missing mcp_socket, missing ssh_user,
+// missing ssh_host, and valid config.
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -27,8 +28,18 @@ func TestValidate(t *testing.T) {
 			wantErr: "config: mcp_socket is required",
 		},
 		{
+			name:    "missing ssh_user",
+			cfg:     Config{SSHSocket: "/tmp/ssh.sock", MCPSocket: "/tmp/mcp.sock", SSHHost: "host"},
+			wantErr: "config: ssh_user is required",
+		},
+		{
+			name:    "missing ssh_host",
+			cfg:     Config{SSHSocket: "/tmp/ssh.sock", MCPSocket: "/tmp/mcp.sock", SSHUser: "user"},
+			wantErr: "config: ssh_host is required",
+		},
+		{
 			name: "valid config",
-			cfg:  Config{SSHSocket: "/tmp/ssh.sock", MCPSocket: "/tmp/mcp.sock"},
+			cfg:  Config{SSHSocket: "/tmp/ssh.sock", MCPSocket: "/tmp/mcp.sock", SSHUser: "user", SSHHost: "host"},
 		},
 	}
 	for _, tt := range tests {
@@ -50,6 +61,8 @@ func TestLoadFromPath(t *testing.T) {
 		data := `{
 			"ssh_socket": "/tmp/ssh-ctrl.sock",
 			"mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu",
+			"ssh_host": "my.server.com",
 			"capabilities": {
 				"exec": true
 			}
@@ -69,6 +82,8 @@ func TestLoadFromPath(t *testing.T) {
 		data := `{
 			"ssh_socket": "/tmp/ssh.sock",
 			"mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu",
+			"ssh_host": "my.server.com",
 			"capabilities": {
 				"exec": true,
 				"file_read": true,
@@ -116,6 +131,8 @@ func TestLoadFromPath(t *testing.T) {
 		data := `{
 			"ssh_socket": "/tmp/ssh.sock",
 			"mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu",
+			"ssh_host": "my.server.com",
 			"future_field": "ignored",
 			"another_unknown": 42
 		}`
@@ -132,7 +149,9 @@ func TestLoadFromPath(t *testing.T) {
 func TestTildeValueNotExpanded(t *testing.T) {
 	data := `{
 		"ssh_socket": "/tmp/ssh.sock",
-		"mcp_socket": "~/.config/claude-ssh-daemon/mcp.sock"
+		"mcp_socket": "~/.config/claude-ssh-daemon/mcp.sock",
+		"ssh_user": "ubuntu",
+		"ssh_host": "my.server.com"
 	}`
 	path := writeTemp(t, data)
 	cfg, err := loadFromPath(path)
@@ -162,6 +181,8 @@ func TestLoadUsesDefaultPath(t *testing.T) {
 	data, err := json.Marshal(Config{
 		SSHSocket: "/tmp/ssh-ctrl.sock",
 		MCPSocket: "/tmp/mcp.sock",
+		SSHUser:   "ubuntu",
+		SSHHost:   "my.server.com",
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(configPath, data, 0o600))
