@@ -42,7 +42,8 @@ func Load() (*Config, error) {
 }
 
 // loadFromPath reads and validates the config from the given path.
-// Exported for testing: tests can supply a temp file path directly.
+// Tests in the same package (package config) call this directly to avoid
+// relying on the tilde-expanded default path returned by os.UserHomeDir.
 func loadFromPath(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
