@@ -24,10 +24,12 @@ type Capabilities struct {
 
 // Config holds the daemon configuration loaded from the JSON config file.
 // Phase 1 fields: ssh_socket, mcp_socket, capabilities.
-// ssh_host and ssh_user are deferred to Phase 2 (per D-02).
+// Phase 2 fields: ssh_user, ssh_host (D-03, required).
 type Config struct {
 	SSHSocket    string       `json:"ssh_socket"`
 	MCPSocket    string       `json:"mcp_socket"`
+	SSHUser      string       `json:"ssh_user"`   // added Phase 2 (D-03)
+	SSHHost      string       `json:"ssh_host"`   // added Phase 2 (D-03)
 	Capabilities Capabilities `json:"capabilities"`
 }
 
@@ -63,13 +65,20 @@ func loadFromPath(path string) (*Config, error) {
 
 // Validate checks that required fields are present. Returns a field-specific
 // error message per D-03 and CONTEXT.md §Specific Ideas.
-// ssh_socket is checked first, then mcp_socket.
+// ssh_socket is checked first, then mcp_socket, then ssh_user, then ssh_host.
 func (c *Config) Validate() error {
 	if c.SSHSocket == "" {
 		return errors.New("config: ssh_socket is required")
 	}
 	if c.MCPSocket == "" {
 		return errors.New("config: mcp_socket is required")
+	}
+	// Phase 2 additions (D-03): both ssh_user and ssh_host are required.
+	if c.SSHUser == "" {
+		return errors.New("config: ssh_user is required")
+	}
+	if c.SSHHost == "" {
+		return errors.New("config: ssh_host is required")
 	}
 	return nil
 }
