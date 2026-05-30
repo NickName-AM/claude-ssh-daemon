@@ -131,10 +131,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// Remove the socket file so subsequent daemon starts do not fail with
 	// EADDRINUSE. Ignore "not found" (already removed); log other errors.
-	if err := os.Remove(cfg.MCPSocket); err != nil && !os.IsNotExist(err) {
-		logger.Error("failed to remove socket", "error", err)
+	removeErr := os.Remove(cfg.MCPSocket)
+	socketRemoved := removeErr == nil || os.IsNotExist(removeErr)
+	if removeErr != nil && !os.IsNotExist(removeErr) {
+		logger.Error("failed to remove socket", "error", removeErr)
 	}
 
-	logger.Info("shutdown complete", "socket_removed", true)
+	logger.Info("shutdown complete", "socket_removed", socketRemoved)
 	return nil
 }
