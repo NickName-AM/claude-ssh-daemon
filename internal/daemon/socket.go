@@ -1,3 +1,5 @@
+//go:build darwin || linux
+
 // Package daemon implements the Unix socket lifecycle, MCP server wiring,
 // sequential accept loop, and graceful shutdown for claude-ssh-daemon.
 package daemon
