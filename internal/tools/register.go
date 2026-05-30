@@ -23,8 +23,11 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 	}, statusHandler(exec, cfg))
 
 	if cfg.Capabilities.Exec {
-		// ssh_exec is registered by plan 02-02.
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_exec", ...}, execHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_exec",
+			Description: "Execute a remote shell command via the SSH ControlMaster session",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
+		}, execHandler(exec))
 	}
 
 	if cfg.Capabilities.FileRead {
