@@ -76,7 +76,7 @@ func TestMCPServerEmptyToolList(t *testing.T) {
 // socket removal on exit).
 func TestRunRemovesSocketOnShutdown(t *testing.T) {
 	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "mcp.sock")
+	sockPath := filepath.Join(dir, "s") // short name: macOS sun_path limit is 104 bytes
 
 	cfg := &config.Config{
 		SSHSocket: "/tmp/ssh.sock",

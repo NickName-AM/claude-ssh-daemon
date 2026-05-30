@@ -41,7 +41,9 @@ func startDaemon(t *testing.T, ctx context.Context) (*config.Config, <-chan erro
 	t.Helper()
 
 	cfg := &config.Config{
-		MCPSocket: filepath.Join(t.TempDir(), "mcp.sock"),
+		// Use a single-char socket name: t.TempDir() embeds the full test name,
+		// and on macOS the resulting path can exceed the 104-byte sun_path limit.
+		MCPSocket: filepath.Join(t.TempDir(), "s"),
 		SSHSocket: "/tmp/ssh.sock", // not used in Phase 1; required by Validate()
 		// All capabilities default to false.
 	}
