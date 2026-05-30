@@ -13,6 +13,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/tools"
 )
 
 // logger is the package-level structured JSON logger writing to stderr.
@@ -111,6 +113,15 @@ func Run(ctx context.Context, cfg *config.Config) error {
 
 	// Startup log — includes socket path per §Specific Ideas.
 	logger.Info("daemon started", "mcp_socket", cfg.MCPSocket)
+
+	// Register MCP tools — must happen before acceptLoop starts (Pitfall 3).
+	// Executor is wired here so daemon.go owns the dependency injection root.
+	executor := &ssh.ControlMasterExecutor{
+		Socket: cfg.SSHSocket,
+		User:   cfg.SSHUser,
+		Host:   cfg.SSHHost,
+	}
+	tools.RegisterTools(server, executor, cfg)
 
 	// activeSess holds the session currently blocked in ss.Wait(), if any.
 	// The accept loop stores/clears it around each session so that the drain

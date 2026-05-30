@@ -64,10 +64,13 @@ func startDaemon(t *testing.T, ctx context.Context) (*config.Config, <-chan erro
 	return cfg, errCh
 }
 
-// TestEndToEndEmptyToolList connects a real mcp.Client to the daemon over the
-// real Unix socket and asserts that the tools list is empty (DMON-08 end-to-end).
-// It also verifies that the live socket has mode 0600 (SECU-03).
-func TestEndToEndEmptyToolList(t *testing.T) {
+// TestEndToEndConnectionStatusTool connects a real mcp.Client to the daemon over
+// the real Unix socket and asserts that ssh_connection_status appears in the
+// tools list (CONN-01, DMON-04 end-to-end). Also verifies mode 0600 (SECU-03).
+//
+// Previously named TestEndToEndEmptyToolList (Phase 1). Updated in Phase 2 because
+// RegisterTools now always registers ssh_connection_status regardless of capabilities.
+func TestEndToEndConnectionStatusTool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -93,10 +96,14 @@ func TestEndToEndEmptyToolList(t *testing.T) {
 	require.NoError(t, err, "client.Connect must succeed")
 	defer cs.Close()
 
-	// Assert the tools list is empty (DMON-08 — no tools registered in Phase 1).
+	// Phase 2: ssh_connection_status is always registered (CONN-01, DMON-04).
+	// With all capabilities false, it must be the only tool.
 	tools, err := cs.ListTools(ctx, nil)
 	require.NoError(t, err, "ListTools must succeed")
-	require.Empty(t, tools.Tools, "Phase 1 server must return empty tools/list (DMON-08)")
+	require.Len(t, tools.Tools, 1, "only ssh_connection_status should be registered when all caps false")
+	require.Equal(t, "ssh_connection_status", tools.Tools[0].Name)
+	require.NotNil(t, tools.Tools[0].Annotations, "annotations must not be nil")
+	require.True(t, tools.Tools[0].Annotations.ReadOnlyHint, "readOnlyHint must be true (SECU-02)")
 
 	// Close the client session cleanly before cancelling the daemon.
 	_ = cs.Close()
