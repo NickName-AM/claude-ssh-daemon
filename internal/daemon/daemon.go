@@ -70,6 +70,7 @@ func acceptLoop(ctx context.Context, ln net.Listener, server *mcp.Server) {
 		if err := ss.Wait(); err != nil {
 			logger.Warn("session ended with error", "error", err)
 		}
+		conn.Close() // always close the underlying connection after session ends
 		logger.Info("client disconnected")
 	}
 }
