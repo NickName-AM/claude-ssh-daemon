@@ -65,20 +65,21 @@ var (
 		`(?i)\b(?:you\s+are\s+now|act\s+as\s+(?:if\b|a\b|an\b)|your\s+new\s+(?:persona|role|identity)\s+is)\b`)
 )
 
-// builtinPatterns and builtinCategories are index-aligned parallel slices
-// mapping each compiled regexp to its category label.
-var builtinPatterns = []*regexp.Regexp{
-	reXMLToolTags,
-	reAuthorityTags,
-	reInstructionOverride,
-	reRoleHijacking,
+// builtinEntry pairs a compiled regexp with its category label.
+// Using a single struct slice (instead of parallel slices) ensures the
+// pairing is a single unit — a contributor cannot add a pattern without
+// a category string without getting a compile error.
+type builtinEntry struct {
+	re       *regexp.Regexp
+	category string
 }
 
-var builtinCategories = []string{
-	"xml_tool_tags",
-	"authority_tags",
-	"instruction_override",
-	"role_hijacking",
+// builtins is the index of all built-in detection patterns.
+var builtins = []builtinEntry{
+	{reXMLToolTags, "xml_tool_tags"},
+	{reAuthorityTags, "authority_tags"},
+	{reInstructionOverride, "instruction_override"},
+	{reRoleHijacking, "role_hijacking"},
 }
 
 // ScanWithPatterns scans text against all built-in patterns and any extra
@@ -91,11 +92,11 @@ var builtinCategories = []string{
 func ScanWithPatterns(text string, extra []*regexp.Regexp) Result {
 	var matches []Match // nil zero value — no allocation on the happy path
 
-	for i, re := range builtinPatterns {
-		count := len(re.FindAllString(text, -1))
+	for _, b := range builtins {
+		count := len(b.re.FindAllString(text, -1))
 		if count > 0 {
 			matches = append(matches, Match{
-				Category: builtinCategories[i],
+				Category: b.category,
 				Count:    count,
 			})
 		}
