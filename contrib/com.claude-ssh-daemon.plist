@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Install instructions for macOS (launchd):
+
+  1. Build and install the binary:
+       go build ./cmd/claude-ssh-daemon
+       sudo cp claude-ssh-daemon /usr/local/bin/
+
+  2. Copy this plist to your LaunchAgents directory:
+       cp contrib/com.claude-ssh-daemon.plist ~/Library/LaunchAgents/
+
+  3. Edit ~/Library/LaunchAgents/com.claude-ssh-daemon.plist and replace
+     YOUR_USERNAME in the EnvironmentVariables section with your macOS short
+     username (run `id -un` to find it).
+
+  4. Load and start the service:
+       launchctl load ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+
+  5. View logs:
+       tail -f /tmp/claude-ssh-daemon.log
+
+  To unload the service:
+       launchctl unload ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-ssh-daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/claude-ssh-daemon</string>
+    </array>
+
+    <!-- Start the daemon automatically at login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart the daemon automatically if it exits -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- All daemon output (JSON logs) goes to stderr per design; captured here -->
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-ssh-daemon.log</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-ssh-daemon.log</string>
+
+    <!--
+      Replace YOUR_USERNAME below with your macOS short username (run `id -un`).
+      launchd does not expand ~ in paths, so HOME must be set explicitly so the
+      daemon can resolve ~/.config/claude-ssh-daemon/config.json at startup.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/YOUR_USERNAME</string>
+    </dict>
+</dict>
+</plist>
