@@ -14,13 +14,13 @@
      username (run `id -un` to find it).
 
   4. Load and start the service:
-       launchctl load ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
 
   5. View logs:
-       tail -f /tmp/claude-ssh-daemon.log
+       tail -f ~/Library/Logs/claude-ssh-daemon.log
 
   To unload the service:
-       launchctl unload ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+       launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -37,16 +37,20 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- Restart the daemon automatically if it exits -->
+    <!-- Restart on non-zero exit (crash/error), but not on clean exit (code 0) -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
 
     <!-- All daemon output (JSON logs) goes to stderr per design; captured here -->
     <key>StandardErrorPath</key>
-    <string>/tmp/claude-ssh-daemon.log</string>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-ssh-daemon.log</string>
 
+    <!-- stdout is not used by design; route to /dev/null to prevent interleaving -->
     <key>StandardOutPath</key>
-    <string>/tmp/claude-ssh-daemon.log</string>
+    <string>/dev/null</string>
 
     <!--
       Replace YOUR_USERNAME below with your macOS short username (run `id -un`).
