@@ -23,10 +23,13 @@ type toolsMockExecutor struct {
 	encodingResult string
 	encodingErr    error
 	writeErr       error
+	writtenContent []byte // captures content passed to WriteFile
 	listResult     string
 	listErr        error
 	uploadErr      error
+	uploadCalled   bool // tracks whether UploadFile was invoked
 	downloadErr    error
+	downloadCalled bool // tracks whether DownloadFile was invoked
 	checkErr       error
 }
 
@@ -39,16 +42,19 @@ func (m *toolsMockExecutor) ReadFile(_ context.Context, _ string) ([]byte, error
 func (m *toolsMockExecutor) DetectEncoding(_ context.Context, _ string) (string, error) {
 	return m.encodingResult, m.encodingErr
 }
-func (m *toolsMockExecutor) WriteFile(_ context.Context, _ string, _ []byte) error {
+func (m *toolsMockExecutor) WriteFile(_ context.Context, _ string, content []byte) error {
+	m.writtenContent = content
 	return m.writeErr
 }
 func (m *toolsMockExecutor) ListDir(_ context.Context, _ string) (string, error) {
 	return m.listResult, m.listErr
 }
 func (m *toolsMockExecutor) UploadFile(_ context.Context, _, _ string) error {
+	m.uploadCalled = true
 	return m.uploadErr
 }
 func (m *toolsMockExecutor) DownloadFile(_ context.Context, _, _ string) error {
+	m.downloadCalled = true
 	return m.downloadErr
 }
 func (m *toolsMockExecutor) CheckSocket(_ context.Context) error {

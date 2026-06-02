@@ -31,9 +31,16 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 	}
 
 	if cfg.Capabilities.FileRead {
-		// ssh_read_file and ssh_list_dir are registered by plan 02-03.
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_read_file", ...}, readFileHandler(exec))
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_list_dir", ...}, listDirHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_read_file",
+			Description: "Read the contents of a remote file",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		}, readFileHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_list_dir",
+			Description: "List the contents of a remote directory",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		}, listDirHandler(exec))
 	}
 
 	if cfg.Capabilities.FileWrite {
