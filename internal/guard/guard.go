@@ -8,7 +8,11 @@
 // guard layer from accidentally echoing adversarial content back to the LLM.
 package guard
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+	"unicode"
+)
 
 // Result holds the outcome of a scan. Matches is nil when no injection
 // patterns are detected (zero allocation on the happy path).
@@ -103,6 +107,16 @@ var builtins = []builtinEntry{
 // The returned Result has Matches == nil when no patterns hit (D-02, Pitfall 3).
 // Matched text is never stored or returned — only the count (D-02).
 func ScanWithPatterns(text string, extra []*regexp.Regexp) Result {
+	// Normalize Unicode whitespace to ASCII space so that non-ASCII space
+	// code points (U+00A0, U+2002, U+2003, U+202F, etc.) cannot bypass
+	// multi-word patterns. Go RE2 \s only covers ASCII whitespace.
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, text)
+
 	var matches []Match // nil zero value — no allocation on the happy path
 
 	for _, b := range builtins {
