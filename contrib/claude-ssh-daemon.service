@@ -24,7 +24,6 @@
 
 [Unit]
 Description=claude-ssh-daemon — MCP SSH bridge over Unix socket
-After=network.target
 
 [Service]
 Type=simple
