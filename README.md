@@ -42,6 +42,7 @@ The daemon should run persistently so it is available whenever Claude Code needs
 
 - **Linux (systemd):** Copy `contrib/claude-ssh-daemon.service` to `~/.config/systemd/user/` and run:
   ```sh
+  systemctl --user daemon-reload
   systemctl --user enable --now claude-ssh-daemon
   ```
   The service file has install instructions in its comments. View logs with:
