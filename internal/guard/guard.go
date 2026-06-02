@@ -62,7 +62,7 @@ var (
 	//   2. "your instructions" explicit — preserves "disregard your instructions"
 	//      as a true positive without reintroducing the bare-verb false-positive surface
 	reInstructionOverride = regexp.MustCompile(
-		`(?i)\b(?:ignore|disregard|forget)\s+(?:(?:all\s+)?(?:the\s+|your\s+)?previous\s+instructions|your\s+instructions)\b`)
+		`(?i)\b(?:ignore|disregard|forget)\s+(?:(?:all\s+)?(?:the\s+|your\s+)?previous\s+instructions|(?:all\s+)?your\s+instructions)\b`)
 
 	// reRoleHijacking matches role/persona hijacking openers that attempt to
 	// reassign the model's identity.
