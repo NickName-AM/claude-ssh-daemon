@@ -66,6 +66,6 @@ func statusHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[Sta
 		return &mcp.CallToolResult{
 			IsError: false,
 			Content: []mcp.Content{&mcp.TextContent{Text: string(b)}},
-		}, StatusOutput{}, nil
+		}, out, nil
 	}
 }

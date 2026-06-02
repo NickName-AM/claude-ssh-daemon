@@ -177,6 +177,16 @@ func TestSSHConnectionStatusDeadSocket(t *testing.T) {
 	require.False(t, out.Connected, "connected must be false for dead socket")
 	require.Equal(t, cfg.SSHSocket, out.SocketPath, "socket_path must match config")
 	require.Contains(t, out.Hint, cfg.SSHSocket, "hint must contain the socket path")
+
+	// StructuredContent must mirror the text content — returning StatusOutput{}
+	// (empty) instead of the populated out would leave these fields blank.
+	// InMemoryTransport round-trips through JSON so StructuredContent arrives as map[string]any.
+	sc, ok := result.StructuredContent.(map[string]any)
+	require.True(t, ok, "StructuredContent must be map[string]any after transport round-trip")
+	require.Equal(t, false, sc["connected"], "structuredContent.connected must be false")
+	require.Equal(t, cfg.SSHSocket, sc["socket_path"], "structuredContent.socket_path must match config")
+	hint, _ := sc["hint"].(string)
+	require.Contains(t, hint, cfg.SSHSocket, "structuredContent.hint must contain the socket path")
 }
 
 // TestRegisterToolsCapabilityGating verifies that with all capabilities false,
