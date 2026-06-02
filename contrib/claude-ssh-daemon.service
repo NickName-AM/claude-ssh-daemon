@@ -29,6 +29,7 @@ Description=claude-ssh-daemon — MCP SSH bridge over Unix socket
 Type=simple
 ExecStart=/usr/local/bin/claude-ssh-daemon
 Restart=on-failure
+RestartSec=5s
 # All daemon output is JSON logs written to stderr (per design). systemd
 # captures stderr to the journal automatically via StandardError=journal.
 StandardError=journal
