@@ -93,7 +93,7 @@ func ScanWithPatterns(text string, extra []*regexp.Regexp) Result {
 	var matches []Match // nil zero value — no allocation on the happy path
 
 	for _, b := range builtins {
-		count := len(b.re.FindAllString(text, -1))
+		count := len(b.re.FindAllStringIndex(text, -1))
 		if count > 0 {
 			matches = append(matches, Match{
 				Category: b.category,
@@ -106,7 +106,7 @@ func ScanWithPatterns(text string, extra []*regexp.Regexp) Result {
 	if len(extra) > 0 {
 		customCount := 0
 		for _, re := range extra {
-			customCount += len(re.FindAllString(text, -1))
+			customCount += len(re.FindAllStringIndex(text, -1))
 		}
 		if customCount > 0 {
 			matches = append(matches, Match{Category: "custom", Count: customCount})
