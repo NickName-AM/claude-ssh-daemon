@@ -1,0 +1,39 @@
+# Install instructions for Linux (systemd user service):
+#
+# 1. Build and install the binary:
+#      go build ./cmd/claude-ssh-daemon
+#      sudo cp claude-ssh-daemon /usr/local/bin/
+#
+# 2. Copy this unit file to your systemd user config directory:
+#      mkdir -p ~/.config/systemd/user/
+#      cp contrib/claude-ssh-daemon.service ~/.config/systemd/user/
+#
+# 3. Reload the systemd user daemon and enable the service:
+#      systemctl --user daemon-reload
+#      systemctl --user enable --now claude-ssh-daemon
+#
+# 4. View logs:
+#      journalctl --user -u claude-ssh-daemon -f
+#
+# Note: A systemd --user service runs with your user's HOME already set, so
+# the daemon resolves ~/.config/claude-ssh-daemon/config.json automatically.
+# No hardcoded HOME path is needed here, unlike the launchd plist.
+#
+# To disable the service:
+#      systemctl --user disable --now claude-ssh-daemon
+
+[Unit]
+Description=claude-ssh-daemon — MCP SSH bridge over Unix socket
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/claude-ssh-daemon
+Restart=on-failure
+# All daemon output is JSON logs written to stderr (per design). systemd
+# captures stderr to the journal automatically via StandardError=journal.
+StandardError=journal
+StandardOutput=journal
+
+[Install]
+WantedBy=default.target
