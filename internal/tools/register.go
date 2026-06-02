@@ -44,10 +44,21 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 	}
 
 	if cfg.Capabilities.FileWrite {
-		// ssh_write_file, ssh_upload_file, and ssh_download_file are registered by plan 02-04.
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_write_file",     ...}, writeFileHandler(exec))
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_upload_file",    ...}, uploadHandler(exec))
-		// mcp.AddTool(server, &mcp.Tool{Name: "ssh_download_file",  ...}, downloadHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_write_file",
+			Description: "Write or overwrite a remote file",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
+		}, writeFileHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_upload_file",
+			Description: "Upload a local file to the remote host",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
+		}, uploadHandler(exec))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_download_file",
+			Description: "Download a remote file to the local machine",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
+		}, downloadHandler(exec))
 	}
 }
 
