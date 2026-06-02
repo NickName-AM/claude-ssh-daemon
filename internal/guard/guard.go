@@ -50,10 +50,19 @@ var (
 	// reInstructionOverride matches instruction-override phrases that attempt
 	// to replace or nullify prior instructions.
 	// Covers: "ignore previous instructions", "Ignore Previous Instructions",
+	//         "ignore the previous instructions", "ignore your previous instructions",
 	//         "disregard your instructions", "forget all previous instructions"
-	// Does NOT match: "follow your instructions", "these are the instructions"
+	// Does NOT match: "follow your instructions", "these are the instructions",
+	//         "ignore instructions" (bare verb form — too broad for build/tool output),
+	//         "parser will ignore instructions after this point"
+	//
+	// Pattern has two arms:
+	//   1. "previous" required (with optional "all", "the", or "your" before it)
+	//      — covers the canonical "ignore [all|the|your] previous instructions" family
+	//   2. "your instructions" explicit — preserves "disregard your instructions"
+	//      as a true positive without reintroducing the bare-verb false-positive surface
 	reInstructionOverride = regexp.MustCompile(
-		`(?i)\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:your\s+)?(?:previous\s+)?instructions\b`)
+		`(?i)\b(?:ignore|disregard|forget)\s+(?:(?:all\s+)?(?:the\s+|your\s+)?previous\s+instructions|your\s+instructions)\b`)
 
 	// reRoleHijacking matches role/persona hijacking openers that attempt to
 	// reassign the model's identity.

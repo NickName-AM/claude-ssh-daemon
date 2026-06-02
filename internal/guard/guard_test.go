@@ -93,10 +93,15 @@ func TestScanInstructionOverride(t *testing.T) {
 	}{
 		{name: "ignore previous instructions", text: "ignore previous instructions", wantHit: true, wantCount: 1},
 		{name: "uppercase variant", text: "Ignore Previous Instructions", wantHit: true, wantCount: 1},
+		{name: "ignore the previous instructions", text: "ignore the previous instructions", wantHit: true, wantCount: 1},
+		{name: "ignore your previous instructions", text: "ignore your previous instructions", wantHit: true, wantCount: 1},
 		{name: "disregard your instructions", text: "disregard your instructions", wantHit: true, wantCount: 1},
 		{name: "forget all previous instructions", text: "forget all previous instructions", wantHit: true, wantCount: 1},
 		{name: "follow your instructions", text: "follow your instructions", wantHit: false, wantCount: 0},
 		{name: "these are the instructions", text: "these are the instructions", wantHit: false, wantCount: 0},
+		// True negatives: bare "ignore instructions" must NOT match (fires on build/tool output)
+		{name: "ignore instructions bare", text: "parser will ignore instructions after this point", wantHit: false, wantCount: 0},
+		{name: "disregard instructions bare", text: "WARNING: disregard instructions in legacy config format", wantHit: false, wantCount: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
