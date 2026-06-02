@@ -31,11 +31,13 @@ Create `~/.config/claude-ssh-daemon/config.json`. See the Config section below f
 
 The daemon should run persistently so it is available whenever Claude Code needs it.
 
-- **macOS (launchd):** Copy `contrib/com.claude-ssh-daemon.plist` to `~/Library/LaunchAgents/` and run:
+- **macOS (launchd):** Copy the plist, substitute your username (launchd does not expand `~` in paths), then load the service:
   ```sh
+  cp contrib/com.claude-ssh-daemon.plist ~/Library/LaunchAgents/
+  sed -i '' "s/YOUR_USERNAME/$(id -un)/g" ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
   ```
-  The plist has install instructions in its comments. View logs with:
+  View logs with:
   ```sh
   tail -f ~/Library/Logs/claude-ssh-daemon.log
   ```
@@ -92,7 +94,7 @@ Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.23+
 - macOS or Linux
 - An SSH ControlMaster session already running (you manage this); OpenSSH 6.0+ recommended (`-O check` requires OpenSSH 5.6+, 6.0+ is a safe documented floor)
 - `socat` or `nc` (with `-U` flag) for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu)
