@@ -6,16 +6,14 @@ The key idea: Claude never touches your SSH credentials or manages connection li
 
 ## Quick start
 
-End-to-end setup in five steps.
-
-**Step 1 — Build and install the binary**
+**Step 1: Build and install the binary**
 
 ```sh
 go build ./cmd/claude-ssh-daemon
 sudo cp claude-ssh-daemon /usr/local/bin/
 ```
 
-**Step 2 — Start your SSH ControlMaster session**
+**Step 2: Start your SSH ControlMaster session**
 
 The daemon never manages SSH connections. You start and maintain the session yourself. The `-S` socket path must match the `ssh_socket` value in your config.
 
@@ -23,11 +21,11 @@ The daemon never manages SSH connections. You start and maintain the session you
 ssh -M -S /tmp/ssh-ctrl-user@host.sock -fN user@host
 ```
 
-**Step 3 — Write your config**
+**Step 3: Write your config**
 
 Create `~/.config/claude-ssh-daemon/config.json`. See the Config section below for the full example.
 
-**Step 4 — Install the background service**
+**Step 4: Install the background service**
 
 The daemon should run persistently so it is available whenever Claude Code needs it.
 
@@ -41,6 +39,10 @@ The daemon should run persistently so it is available whenever Claude Code needs
   ```sh
   tail -f ~/Library/Logs/claude-ssh-daemon.log
   ```
+  To unload:
+  ```sh
+  launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+  ```
 
 - **Linux (systemd):** Copy `contrib/claude-ssh-daemon.service` to `~/.config/systemd/user/` and run:
   ```sh
@@ -52,15 +54,28 @@ The daemon should run persistently so it is available whenever Claude Code needs
   journalctl --user -u claude-ssh-daemon -f
   ```
 
-**Step 5 — Add the MCP entry to your Claude Code project**
+**Step 5: Register the MCP server with Claude Code**
 
-See the Connect Claude Code section below for the ready-to-paste `.claude/mcp.json` block.
+Replace `/tmp/claude-ssh-daemon.sock` with the `mcp_socket` path from your config.
+
+```sh
+claude mcp add claude-ssh-daemon socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
+```
+
+This registers the server globally (all projects). Verify it connected:
+
+```sh
+# In any Claude Code session:
+/mcp
+```
+
+You should see `claude-ssh-daemon` listed as connected with its tools.
 
 ---
 
 ## What it can do
 
-**SSH tools (v1 — all 7 shipped)**
+**SSH tools (v1 -- all 7 shipped)**
 
 | Tool | Type | Description |
 |------|------|-------------|
@@ -84,11 +99,11 @@ See the Connect Claude Code section below for the ready-to-paste `.claude/mcp.js
 - Socket created with mode 0600 (owner read/write only)
 - Umask-before-listen pattern to close the race window between `listen()` and `chmod()` (mitigates CVE-2023-45145 class)
 - Capability toggles in config (`exec`, `file_read`, `file_write`, `port_forward`) all default to off
-- Disabled capabilities are never registered — they do not appear in `tools/list` at all
+- Disabled capabilities are never registered -- they do not appear in `tools/list` at all
 
 ## Roadmap (v2)
 
-Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is the next planned capability. It is not included in v1. See REQUIREMENTS.md §v2 Requirements for the full specification.
+Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is the next planned capability. It is not included in v1. See REQUIREMENTS.md for the full specification.
 
 ---
 
@@ -97,7 +112,7 @@ Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is
 - Go 1.23+
 - macOS or Linux
 - An SSH ControlMaster session already running (you manage this); OpenSSH 6.0+ recommended (`-O check` requires OpenSSH 5.6+, 6.0+ is a safe documented floor)
-- `socat` or `nc` (with `-U` flag) for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu)
+- `socat` for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu)
 
 ## Build
 
@@ -124,9 +139,9 @@ Create `~/.config/claude-ssh-daemon/config.json`:
 }
 ```
 
-`ssh_socket` is the path to your existing ControlMaster socket (`-S` argument you passed to `ssh -M`). `mcp_socket` is where the daemon will listen for Claude Code. `ssh_user` and `ssh_host` identify the remote target; SSH config aliases in `~/.ssh/config` are supported.
+`ssh_socket` is the path to your existing ControlMaster socket (the `-S` argument you passed to `ssh -M`). `mcp_socket` is where the daemon will listen for Claude Code. `ssh_user` and `ssh_host` identify the remote target; SSH config aliases in `~/.ssh/config` are supported.
 
-Capability toggles: only tools for enabled capabilities are registered. Disabled tools are invisible to Claude — they do not appear in `tools/list`.
+Capability toggles: only tools for enabled capabilities are registered. Disabled tools are invisible to Claude -- they do not appear in `tools/list`.
 
 ## Run
 
@@ -138,9 +153,19 @@ The daemon logs to stderr in JSON format. It logs the socket path on startup and
 
 ## Connect Claude Code
 
-Claude Code speaks MCP over stdio. The daemon listens on a Unix domain socket. A `socat` bridge connects the two — Claude Code launches `socat`, which forwards its stdin/stdout to the daemon's socket.
+Claude Code speaks MCP over stdio. The daemon listens on a Unix domain socket. A `socat` bridge connects the two -- Claude Code launches `socat`, which forwards its stdin/stdout to the daemon's socket.
 
-Add this to your project's `.claude/mcp.json`:
+**Global registration (recommended):**
+
+```sh
+claude mcp add claude-ssh-daemon socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
+```
+
+Replace `/tmp/claude-ssh-daemon.sock` with the `mcp_socket` value from your config. This makes the server available in all Claude Code projects.
+
+**Per-project registration:**
+
+Add a `.claude/mcp.json` file in your project directory:
 
 ```json
 {
@@ -154,25 +179,9 @@ Add this to your project's `.claude/mcp.json`:
 }
 ```
 
-Replace `/tmp/claude-ssh-daemon.sock` with the `mcp_socket` value from your config.
+Note: Claude Code has no native Unix-socket transport type -- the `stdio` + `socat` bridge is the correct and only approach. A `unix` or `socket` transport key is not supported.
 
-**Alternative using `nc`:**
-
-```json
-{
-  "mcpServers": {
-    "claude-ssh-daemon": {
-      "type": "stdio",
-      "command": "nc",
-      "args": ["-U", "/tmp/claude-ssh-daemon.sock"]
-    }
-  }
-}
-```
-
-Note: Claude Code has no native Unix-socket transport type — the `stdio` + bridge pattern above is the correct and only approach. A `unix` or `socket` transport key is not supported by Claude Code.
-
-The MCP socket is created mode 0600 (owner-only), so the `socat`/`nc` bridge is only reachable by the user who owns the daemon process.
+The MCP socket is created mode 0600 (owner-only), so the `socat` bridge is only reachable by the user who owns the daemon process.
 
 ## Project status
 
