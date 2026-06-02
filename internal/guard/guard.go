@@ -57,12 +57,16 @@ var (
 
 	// reRoleHijacking matches role/persona hijacking openers that attempt to
 	// reassign the model's identity.
-	// Covers: "you are now", "act as a X", "act as an X", "act as if ...",
-	//         "your new persona is", "your new role is", "your new identity is"
-	// Does NOT match: "you are helpful", "act accordingly", "act as expected",
-	//         "act as required" — article/if anchor required after "act as" (Pitfall 5)
+	// Covers: "you are now a X", "you are now an X", "act as a X", "act as an X",
+	//         "act as if ...", "your new persona is", "your new role is",
+	//         "your new identity is"
+	// Does NOT match: "you are now connected", "you are now running as sudo",
+	//         "you are helpful", "act accordingly", "act as expected",
+	//         "act as required" — article/if anchor required after "act as" (Pitfall 5),
+	//         and "you are now" requires a following article (a/an) to avoid false
+	//         positives on routine SSH/PAM/provisioning status messages.
 	reRoleHijacking = regexp.MustCompile(
-		`(?i)\b(?:you\s+are\s+now|act\s+as\s+(?:if\b|a\b|an\b)|your\s+new\s+(?:persona|role|identity)\s+is)\b`)
+		`(?i)\b(?:you\s+are\s+now\s+(?:a|an)\s+\w+\b|act\s+as\s+(?:if\b|a\b|an\b)|your\s+new\s+(?:persona|role|identity)\s+is\b)`)
 )
 
 // builtinEntry pairs a compiled regexp with its category label.
