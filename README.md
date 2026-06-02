@@ -33,11 +33,11 @@ The daemon should run persistently so it is available whenever Claude Code needs
 
 - **macOS (launchd):** Copy `contrib/com.claude-ssh-daemon.plist` to `~/Library/LaunchAgents/` and run:
   ```sh
-  launchctl load ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
   ```
   The plist has install instructions in its comments. View logs with:
   ```sh
-  tail -f /tmp/claude-ssh-daemon.log
+  tail -f ~/Library/Logs/claude-ssh-daemon.log
   ```
 
 - **Linux (systemd):** Copy `contrib/claude-ssh-daemon.service` to `~/.config/systemd/user/` and run:
