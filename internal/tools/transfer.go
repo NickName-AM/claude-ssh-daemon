@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -37,7 +38,7 @@ type DownloadOutput struct {
 
 // uploadHandler returns a ToolHandlerFor closure for the ssh_upload_file tool.
 // Rejects relative local paths before touching the executor (D-02, T-02-13).
-func uploadHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[UploadInput, UploadOutput] {
+func uploadHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[UploadInput, UploadOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in UploadInput) (*mcp.CallToolResult, UploadOutput, error) {
 		if !filepath.IsAbs(in.LocalPath) {
 			return &mcp.CallToolResult{
@@ -58,7 +59,7 @@ func uploadHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[UploadInput, UploadOutp
 
 // downloadHandler returns a ToolHandlerFor closure for the ssh_download_file tool.
 // Rejects relative local paths before touching the executor (D-02, T-02-13).
-func downloadHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[DownloadInput, DownloadOutput] {
+func downloadHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[DownloadInput, DownloadOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in DownloadInput) (*mcp.CallToolResult, DownloadOutput, error) {
 		if !filepath.IsAbs(in.LocalPath) {
 			return &mcp.CallToolResult{

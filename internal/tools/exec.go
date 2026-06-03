@@ -5,6 +5,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -36,7 +37,7 @@ type ExecOutput struct {
 // EXEC-03 error boundary:
 //   - Non-zero exit code → IsError=false; exit_code carries the value.
 //   - Dead socket / subprocess failure (RunCommand returns non-nil error) → IsError=true.
-func execHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[ExecInput, ExecOutput] {
+func execHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ExecInput, ExecOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ExecInput) (*mcp.CallToolResult, ExecOutput, error) {
 		result, err := e.RunCommand(ctx, ssh.RunRequest{
 			Command:        in.Command,

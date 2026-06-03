@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -24,7 +25,7 @@ type ReadFileOutput struct {
 // readFileHandler returns a ToolHandlerFor closure for the ssh_read_file tool.
 // It detects encoding first (D-07), then reads the file, returning base64 for
 // binary content or a plain utf-8 string for text content.
-func readFileHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[ReadFileInput, ReadFileOutput] {
+func readFileHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ReadFileInput, ReadFileOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ReadFileInput) (*mcp.CallToolResult, ReadFileOutput, error) {
 		enc, err := e.DetectEncoding(ctx, in.Path)
 		if err != nil {
