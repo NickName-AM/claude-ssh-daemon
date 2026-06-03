@@ -58,13 +58,14 @@ func TestConfigLegacyFieldsRetained(t *testing.T) {
 }
 
 // TestValidate covers missing ssh_socket, missing mcp_socket, missing ssh_user,
-// missing ssh_host, and valid config.
+// missing ssh_host, valid config, and all multi-host validation paths.
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     Config
 		wantErr string
 	}{
+		// Legacy (single-host) path — existing cases
 		{
 			name:    "missing ssh_socket",
 			cfg:     Config{MCPSocket: "/tmp/mcp.sock"},
@@ -86,8 +87,85 @@ func TestValidate(t *testing.T) {
 			wantErr: "config: ssh_host is required",
 		},
 		{
-			name: "valid config",
+			name: "valid legacy config",
 			cfg:  Config{SSHSocket: "/tmp/ssh.sock", MCPSocket: "/tmp/mcp.sock", SSHUser: "user", SSHHost: "host"},
+		},
+		// mcp_socket always checked first regardless of host style
+		{
+			name: "missing mcp_socket with multi-host block",
+			cfg: Config{
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+				},
+				DefaultHost: "web",
+			},
+			wantErr: "config: mcp_socket is required",
+		},
+		// Multi-host path — new cases (MHST-03, MHST-04, Open Question 3)
+		{
+			name: "non-empty hosts missing default_host",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+				},
+			},
+			wantErr: "config: hosts is non-empty but default_host is absent",
+		},
+		{
+			name: "default_host names missing key",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+				},
+				DefaultHost: "db",
+			},
+			wantErr: `config: default_host "db" is not a key in hosts`,
+		},
+		{
+			name: "per-host empty socket",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {User: "ubuntu", Host: "web.example.com"}, // socket missing
+				},
+				DefaultHost: "web",
+			},
+			wantErr: `config: hosts["web"].socket is required`,
+		},
+		{
+			name: "per-host empty user",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", Host: "web.example.com"}, // user missing
+				},
+				DefaultHost: "web",
+			},
+			wantErr: `config: hosts["web"].user is required`,
+		},
+		{
+			name: "per-host empty host",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", User: "ubuntu"}, // host missing
+				},
+				DefaultHost: "web",
+			},
+			wantErr: `config: hosts["web"].host is required`,
+		},
+		{
+			name: "valid multi-host config",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+					"db":  {Socket: "/tmp/db.sock", User: "ubuntu", Host: "db.example.com"},
+				},
+				DefaultHost: "web",
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -100,6 +178,98 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateLegacyAutoSeed verifies that Validate() populates cfg.Hosts and
+// cfg.DefaultHost when only legacy fields are present (MHST-03, D-03).
+func TestValidateLegacyAutoSeed(t *testing.T) {
+	t.Run("legacy auto-seed populates hosts and default_host", func(t *testing.T) {
+		cfg := Config{
+			SSHSocket: "/tmp/ssh.sock",
+			MCPSocket: "/tmp/mcp.sock",
+			SSHUser:   "ubuntu",
+			SSHHost:   "my.server.com",
+		}
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "default", cfg.DefaultHost, "DefaultHost must be auto-set to 'default'")
+		require.NotNil(t, cfg.Hosts, "Hosts must be non-nil after auto-seed")
+		require.Contains(t, cfg.Hosts, "default", "Hosts must contain 'default' key after auto-seed")
+		require.Equal(t, "/tmp/ssh.sock", cfg.Hosts["default"].Socket)
+		require.Equal(t, "ubuntu", cfg.Hosts["default"].User)
+		require.Equal(t, "my.server.com", cfg.Hosts["default"].Host)
+	})
+
+	t.Run("explicit empty hosts map triggers auto-seed (Pitfall 7)", func(t *testing.T) {
+		// JSON "hosts": {} decodes to a non-nil but empty map; len==0 must still trigger auto-seed.
+		cfg := Config{
+			SSHSocket: "/tmp/ssh.sock",
+			MCPSocket: "/tmp/mcp.sock",
+			SSHUser:   "ubuntu",
+			SSHHost:   "my.server.com",
+			Hosts:     map[string]HostConfig{}, // explicitly empty, not nil
+		}
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "default", cfg.DefaultHost)
+		require.Contains(t, cfg.Hosts, "default")
+	})
+}
+
+// TestMultiHostLoadFromPath verifies JSON round-trip parsing of multi-host config.
+func TestMultiHostLoadFromPath(t *testing.T) {
+	t.Run("multi-host JSON parses correctly and validates", func(t *testing.T) {
+		data := `{
+			"mcp_socket": "/tmp/claude-ssh.sock",
+			"default_host": "web",
+			"hosts": {
+				"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com"},
+				"db":  {"socket": "/tmp/ssh-db.sock",  "user": "ubuntu", "host": "db.example.com"}
+			},
+			"capabilities": {"exec": true}
+		}`
+		path := writeTemp(t, data)
+		cfg, err := loadFromPath(path)
+		require.NoError(t, err)
+		require.Equal(t, "web", cfg.DefaultHost)
+		require.Len(t, cfg.Hosts, 2)
+		require.Equal(t, "/tmp/ssh-web.sock", cfg.Hosts["web"].Socket)
+		require.Equal(t, "ubuntu", cfg.Hosts["web"].User)
+		require.Equal(t, "web.example.com", cfg.Hosts["web"].Host)
+		require.Equal(t, "/tmp/ssh-db.sock", cfg.Hosts["db"].Socket)
+		require.Equal(t, "ubuntu", cfg.Hosts["db"].User)
+		require.Equal(t, "db.example.com", cfg.Hosts["db"].Host)
+		require.True(t, cfg.Capabilities.Exec)
+	})
+
+	t.Run("legacy single-host JSON auto-seeds to hosts default", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh-ctrl.sock",
+			"mcp_socket": "/tmp/claude-ssh.sock",
+			"ssh_user": "ubuntu",
+			"ssh_host": "my.server.com"
+		}`
+		path := writeTemp(t, data)
+		cfg, err := loadFromPath(path)
+		require.NoError(t, err)
+		require.Equal(t, "default", cfg.DefaultHost)
+		require.Equal(t, "/tmp/ssh-ctrl.sock", cfg.Hosts["default"].Socket)
+		require.Equal(t, "ubuntu", cfg.Hosts["default"].User)
+		require.Equal(t, "my.server.com", cfg.Hosts["default"].Host)
+	})
+
+	t.Run("explicit empty hosts JSON triggers auto-seed", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock",
+			"mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu",
+			"ssh_host": "my.server.com",
+			"hosts": {}
+		}`
+		path := writeTemp(t, data)
+		cfg, err := loadFromPath(path)
+		require.NoError(t, err)
+		require.Equal(t, "default", cfg.DefaultHost)
+		require.Contains(t, cfg.Hosts, "default")
+	})
 }
 
 // TestLoadFromPath verifies JSON parsing, struct field mapping, capability defaults,
