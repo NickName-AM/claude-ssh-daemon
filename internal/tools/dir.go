@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -95,7 +96,7 @@ func parseLsOutput(raw string) []DirEntry {
 
 // listDirHandler returns a ToolHandlerFor closure for the ssh_list_dir tool.
 // It calls e.ListDir, parses the ls -la output, and returns structured entries.
-func listDirHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[ListDirInput, ListDirOutput] {
+func listDirHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ListDirInput, ListDirOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListDirInput) (*mcp.CallToolResult, ListDirOutput, error) {
 		raw, err := e.ListDir(ctx, in.Path)
 		if err != nil {

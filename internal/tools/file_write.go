@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -25,7 +26,7 @@ type WriteFileOutput struct {
 
 // writeFileHandler returns a ToolHandlerFor closure for the ssh_write_file tool.
 // It decodes base64 content when requested (D-08), then pipes bytes to the executor.
-func writeFileHandler(e ssh.SSHExecutor) mcp.ToolHandlerFor[WriteFileInput, WriteFileOutput] {
+func writeFileHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[WriteFileInput, WriteFileOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in WriteFileInput) (*mcp.CallToolResult, WriteFileOutput, error) {
 		var data []byte
 		if in.Encoding == "base64" {

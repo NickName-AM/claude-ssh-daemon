@@ -27,7 +27,7 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 			Name:        "ssh_exec",
 			Description: "Execute a remote shell command via the SSH ControlMaster session",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, execHandler(exec))
+		}, execHandler(exec, cfg))
 	}
 
 	if cfg.Capabilities.FileRead {
@@ -35,12 +35,12 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 			Name:        "ssh_read_file",
 			Description: "Read the contents of a remote file",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-		}, readFileHandler(exec))
+		}, readFileHandler(exec, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_list_dir",
 			Description: "List the contents of a remote directory",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-		}, listDirHandler(exec))
+		}, listDirHandler(exec, cfg))
 	}
 
 	if cfg.Capabilities.FileWrite {
@@ -48,17 +48,17 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 			Name:        "ssh_write_file",
 			Description: "Write or overwrite a remote file",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, writeFileHandler(exec))
+		}, writeFileHandler(exec, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_upload_file",
 			Description: "Upload a local file to the remote host",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, uploadHandler(exec))
+		}, uploadHandler(exec, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_download_file",
 			Description: "Download a remote file to the local machine",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, downloadHandler(exec))
+		}, downloadHandler(exec, cfg))
 	}
 }
 
