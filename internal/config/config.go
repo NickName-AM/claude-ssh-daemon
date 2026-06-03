@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -98,23 +99,69 @@ func loadFromPath(path string) (*Config, error) {
 	return &cfg, cfg.Validate()
 }
 
-// Validate checks that required fields are present. Returns a field-specific
-// error message per D-03 and CONTEXT.md §Specific Ideas.
-// ssh_socket is checked first, then mcp_socket, then ssh_user, then ssh_host.
+// Validate checks required fields and resolves multi-host configuration.
+//
+// Check order (Pitfall 4 — mcp_socket always first):
+//  1. mcp_socket — required regardless of host style
+//  2. Multi-host resolution — len(c.Hosts) == 0 (NOT c.Hosts == nil, Pitfall 7):
+//     - Empty/absent: auto-seed hosts["default"] from legacy fields (MHST-03, D-03)
+//     - Non-empty: validate per-host fields and default_host (MHST-04, D-05)
+//  3. Safeguards.Patterns compilation (unchanged; runs after host resolution)
+//
+// After Validate() returns nil, c.Hosts is guaranteed non-empty and c.DefaultHost
+// names a valid key in c.Hosts. All downstream code reads from c.Hosts.
 func (c *Config) Validate() error {
-	if c.SSHSocket == "" {
-		return errors.New("config: ssh_socket is required")
-	}
+	// 1. mcp_socket is always required, regardless of host style (Pitfall 4).
 	if c.MCPSocket == "" {
 		return errors.New("config: mcp_socket is required")
 	}
-	// Phase 2 additions (D-03): both ssh_user and ssh_host are required.
-	if c.SSHUser == "" {
-		return errors.New("config: ssh_user is required")
+
+	// 2. Multi-host resolution: use len() not == nil to handle "hosts": {} (Pitfall 7).
+	if len(c.Hosts) == 0 {
+		// MHST-03: auto-seed from legacy fields. Validate each is present.
+		if c.SSHSocket == "" {
+			return errors.New("config: ssh_socket is required")
+		}
+		if c.SSHUser == "" {
+			return errors.New("config: ssh_user is required")
+		}
+		if c.SSHHost == "" {
+			return errors.New("config: ssh_host is required")
+		}
+		c.Hosts = map[string]HostConfig{
+			"default": {Socket: c.SSHSocket, User: c.SSHUser, Host: c.SSHHost},
+		}
+		c.DefaultHost = "default"
+	} else {
+		// Hosts block is authoritative (D-02). Validate per-host field completeness
+		// in sorted key order for deterministic error messages (Open Question 3).
+		keys := make([]string, 0, len(c.Hosts))
+		for k := range c.Hosts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, name := range keys {
+			h := c.Hosts[name]
+			if h.Socket == "" {
+				return fmt.Errorf("config: hosts[%q].socket is required", name)
+			}
+			if h.User == "" {
+				return fmt.Errorf("config: hosts[%q].user is required", name)
+			}
+			if h.Host == "" {
+				return fmt.Errorf("config: hosts[%q].host is required", name)
+			}
+		}
+		// MHST-04: fail fast if default_host is absent or names a missing key (D-05).
+		if c.DefaultHost == "" {
+			return errors.New("config: hosts is non-empty but default_host is absent")
+		}
+		if _, ok := c.Hosts[c.DefaultHost]; !ok {
+			return fmt.Errorf("config: default_host %q is not a key in hosts", c.DefaultHost)
+		}
 	}
-	if c.SSHHost == "" {
-		return errors.New("config: ssh_host is required")
-	}
+
+	// 3. Compile Safeguards patterns (unchanged; runs after host resolution).
 	for i, pat := range c.Safeguards.Patterns {
 		re, err := regexp.Compile(pat)
 		if err != nil {
