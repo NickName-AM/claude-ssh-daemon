@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
 type writeFileOutput struct {
@@ -26,6 +27,11 @@ func newFileWriteTestServer(t *testing.T, exec *toolsMockExecutor, fileWrite boo
 		SSHHost:   "host",
 		Capabilities: config.Capabilities{
 			FileWrite: fileWrite,
+		},
+		// AllowOverwrite=true so these helpers test the write path itself,
+		// not the SAFE-01 existence gate. Gate behavior is tested separately.
+		Safeguards: config.Safeguards{
+			AllowOverwrite: true,
 		},
 	}
 	return newTestServer(t, exec, cfg)
@@ -113,6 +119,155 @@ func TestWriteFileWriteError(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, result.IsError, "write error must set isError")
+}
+
+// TestWriteFileOverwriteBlockedWhenFileExists verifies SAFE-01: when allow_overwrite
+// is false and the remote file already exists (RunCommand ExitCode==0), the handler
+// returns isError:true naming the file path and the safeguards.allow_overwrite key,
+// and WriteFile is NOT called.
+func TestWriteFileOverwriteBlockedWhenFileExists(t *testing.T) {
+	mock := &toolsMockExecutor{
+		runResult: ssh.RunResult{ExitCode: 0}, // test -e returns 0 → file exists
+	}
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileWrite: true,
+		},
+		Safeguards: config.Safeguards{
+			AllowOverwrite: false,
+		},
+	}
+	cs := newTestServer(t, mock, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/remote/important.txt",
+			"content": "new data",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "existing file with allow_overwrite=false must set isError")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "/remote/important.txt", "error must name the file path")
+	require.Contains(t, text.Text, "safeguards.allow_overwrite", "error must name the config key")
+	require.Nil(t, mock.writtenContent, "WriteFile must not be called when file exists and allow_overwrite is false")
+}
+
+// TestWriteFileAllowedWhenFileAbsent verifies SAFE-01: when allow_overwrite is false
+// but the remote file does not exist (RunCommand ExitCode==1), the write proceeds.
+func TestWriteFileAllowedWhenFileAbsent(t *testing.T) {
+	mock := &toolsMockExecutor{
+		runResult: ssh.RunResult{ExitCode: 1}, // test -e returns 1 → file absent
+	}
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileWrite: true,
+		},
+		Safeguards: config.Safeguards{
+			AllowOverwrite: false,
+		},
+	}
+	cs := newTestServer(t, mock, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/remote/new.txt",
+			"content": "hello",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "absent file must allow write")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out writeFileOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.True(t, out.Written, "Written must be true when file is absent")
+}
+
+// TestWriteFileAllowOverwriteTrue verifies SAFE-01: when allow_overwrite is true,
+// the existence check is skipped entirely and the write proceeds regardless.
+func TestWriteFileAllowOverwriteTrue(t *testing.T) {
+	// runResult.ExitCode=0 simulates that the file would exist,
+	// but with AllowOverwrite=true the check must never be consulted.
+	mock := &toolsMockExecutor{
+		runResult: ssh.RunResult{ExitCode: 0},
+	}
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileWrite: true,
+		},
+		Safeguards: config.Safeguards{
+			AllowOverwrite: true,
+		},
+	}
+	cs := newTestServer(t, mock, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/remote/file.txt",
+			"content": "overwrite content",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "allow_overwrite=true must not set isError")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out writeFileOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.True(t, out.Written, "Written must be true when allow_overwrite is true")
+}
+
+// TestWriteFileOverwriteCheckError verifies SAFE-01: when the RunCommand existence
+// check itself returns an error, the handler returns isError:true with "overwrite check failed".
+func TestWriteFileOverwriteCheckError(t *testing.T) {
+	mock := &toolsMockExecutor{
+		runErr: errors.New("ControlMaster socket dead"),
+	}
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileWrite: true,
+		},
+		Safeguards: config.Safeguards{
+			AllowOverwrite: false,
+		},
+	}
+	cs := newTestServer(t, mock, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/remote/file.txt",
+			"content": "data",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "RunCommand error must set isError")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "overwrite check failed", "error must contain 'overwrite check failed'")
+	require.Nil(t, mock.writtenContent, "WriteFile must not be called when check errors")
 }
 
 // TestWriteFileAbsentWhenCapFileWriteFalse verifies that ssh_write_file is absent
