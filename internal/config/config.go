@@ -36,14 +36,34 @@ type Safeguards struct {
 	CompiledPatterns []*regexp.Regexp `json:"-"`
 }
 
+// HostConfig holds the connection parameters for a single named SSH host.
+// Field names match ssh.ControlMasterExecutor exactly (Socket, User, Host)
+// so registry construction in daemon.Run maps 1:1 with no impedance mismatch.
+type HostConfig struct {
+	Socket string `json:"socket"`
+	User   string `json:"user"`
+	Host   string `json:"host"`
+}
+
 // Config holds the daemon configuration loaded from the JSON config file.
 // Phase 1 fields: ssh_socket, mcp_socket, capabilities.
 // Phase 2 fields: ssh_user, ssh_host (D-03, required).
+// v2.0 multi-host additions: hosts map + default_host (D-01, D-02, D-03).
+// Legacy single-host fields (ssh_socket/ssh_user/ssh_host) are retained for
+// backward-compat JSON parsing; when a hosts block is provided they are silently
+// ignored (D-02). When absent, Validate() auto-seeds hosts["default"] from them
+// (D-03). Direct access to SSHSocket/SSHUser/SSHHost after Validate() is
+// deprecated — read from cfg.Hosts instead.
 type Config struct {
-	SSHSocket    string       `json:"ssh_socket"`
+	// Legacy single-host fields (retained for backward-compat JSON parsing; D-02, D-03)
+	SSHSocket string `json:"ssh_socket"`
+	SSHUser   string `json:"ssh_user"` // added Phase 2 (D-03)
+	SSHHost   string `json:"ssh_host"` // added Phase 2 (D-03)
+	// v2.0 multi-host fields (D-01)
+	Hosts       map[string]HostConfig `json:"hosts,omitempty"`
+	DefaultHost string                `json:"default_host,omitempty"`
+	// Unchanged
 	MCPSocket    string       `json:"mcp_socket"`
-	SSHUser      string       `json:"ssh_user"`   // added Phase 2 (D-03)
-	SSHHost      string       `json:"ssh_host"`   // added Phase 2 (D-03)
 	Capabilities Capabilities `json:"capabilities"`
 	Safeguards   Safeguards   `json:"safeguards"`
 }
