@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -22,6 +23,19 @@ type Capabilities struct {
 	PortForward bool `json:"port_forward"`
 }
 
+// Safeguards holds guard-layer configuration flags and user-supplied custom
+// detection patterns. All bool fields default to false when absent from the JSON
+// config (Go zero-value for bool). GuardDisabled false means the guard is ON.
+type Safeguards struct {
+	GuardDisabled  bool     `json:"guard_disabled"`
+	AllowOverwrite bool     `json:"allow_overwrite"`
+	AllowDelete    bool     `json:"allow_delete"`
+	Patterns       []string `json:"patterns"`
+	// CompiledPatterns is runtime state set by Validate(); nil when Patterns is
+	// empty or the safeguards block is absent.
+	CompiledPatterns []*regexp.Regexp `json:"-"`
+}
+
 // Config holds the daemon configuration loaded from the JSON config file.
 // Phase 1 fields: ssh_socket, mcp_socket, capabilities.
 // Phase 2 fields: ssh_user, ssh_host (D-03, required).
@@ -31,6 +45,7 @@ type Config struct {
 	SSHUser      string       `json:"ssh_user"`   // added Phase 2 (D-03)
 	SSHHost      string       `json:"ssh_host"`   // added Phase 2 (D-03)
 	Capabilities Capabilities `json:"capabilities"`
+	Safeguards   Safeguards   `json:"safeguards"`
 }
 
 // Load reads the config from the default path (~/.config/claude-ssh-daemon/config.json),
@@ -79,6 +94,13 @@ func (c *Config) Validate() error {
 	}
 	if c.SSHHost == "" {
 		return errors.New("config: ssh_host is required")
+	}
+	for i, pat := range c.Safeguards.Patterns {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return fmt.Errorf("config: safeguards.patterns[%d] invalid regex %q: %w", i, pat, err)
+		}
+		c.Safeguards.CompiledPatterns = append(c.Safeguards.CompiledPatterns, re)
 	}
 	return nil
 }

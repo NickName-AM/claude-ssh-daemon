@@ -193,6 +193,92 @@ func TestLoadUsesDefaultPath(t *testing.T) {
 	require.Equal(t, "/tmp/ssh-ctrl.sock", cfg.SSHSocket)
 }
 
+// TestSafeguards covers GURD-04, GURD-05, SAFE-03, SAFE-04: absent block zero values,
+// flag parsing, valid pattern compilation, invalid regex errors, and compilation when disabled.
+func TestSafeguards(t *testing.T) {
+	base := `{
+		"ssh_socket": "/tmp/ssh.sock",
+		"mcp_socket": "/tmp/mcp.sock",
+		"ssh_user":   "ubuntu",
+		"ssh_host":   "my.server.com"
+	}`
+
+	t.Run("absent safeguards block: all zero values", func(t *testing.T) {
+		cfg, err := loadFromPath(writeTemp(t, base))
+		require.NoError(t, err)
+		require.False(t, cfg.Safeguards.GuardDisabled)
+		require.False(t, cfg.Safeguards.AllowOverwrite)
+		require.False(t, cfg.Safeguards.AllowDelete)
+		require.Nil(t, cfg.Safeguards.Patterns)
+		require.Nil(t, cfg.Safeguards.CompiledPatterns)
+	})
+
+	t.Run("guard_disabled true is parsed", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"guard_disabled": true}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.True(t, cfg.Safeguards.GuardDisabled)
+	})
+
+	t.Run("allow_overwrite true is parsed", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"allow_overwrite": true}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.True(t, cfg.Safeguards.AllowOverwrite)
+	})
+
+	t.Run("allow_delete true is parsed", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"allow_delete": true}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.True(t, cfg.Safeguards.AllowDelete)
+	})
+
+	t.Run("valid patterns are compiled", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"patterns": ["foo", "bar\\d+"]}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.Len(t, cfg.Safeguards.CompiledPatterns, 2)
+	})
+
+	t.Run("invalid regex at index 0 returns error with index and quoted pattern", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"patterns": ["(?invalid"]}
+		}`
+		_, err := loadFromPath(writeTemp(t, data))
+		require.ErrorContains(t, err, "safeguards.patterns[0]")
+		require.ErrorContains(t, err, `"(?invalid"`)
+	})
+
+	t.Run("invalid regex still errors when guard_disabled is true", func(t *testing.T) {
+		data := `{
+			"ssh_socket": "/tmp/ssh.sock", "mcp_socket": "/tmp/mcp.sock",
+			"ssh_user": "ubuntu", "ssh_host": "my.server.com",
+			"safeguards": {"guard_disabled": true, "patterns": ["(?invalid"]}
+		}`
+		_, err := loadFromPath(writeTemp(t, data))
+		require.Error(t, err, "compilation must run even when guard is disabled")
+	})
+}
+
 // writeTemp writes content to a temporary file and returns its path.
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
