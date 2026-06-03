@@ -28,6 +28,11 @@ func newFileWriteTestServer(t *testing.T, exec *toolsMockExecutor, fileWrite boo
 		Capabilities: config.Capabilities{
 			FileWrite: fileWrite,
 		},
+		// AllowOverwrite=true so these helpers test the write path itself,
+		// not the SAFE-01 existence gate. Gate behavior is tested separately.
+		Safeguards: config.Safeguards{
+			AllowOverwrite: true,
+		},
 	}
 	return newTestServer(t, exec, cfg)
 }
