@@ -33,6 +33,10 @@ func writeFileHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[
 		// SAFE-01: when allow_overwrite is false, check whether the remote target
 		// already exists before performing any decode or write. The path is
 		// POSIX single-quote escaped inline to prevent shell injection (T-06-11).
+		// Note: two separate SSH round-trips (test -e then write) — a file created
+		// between the check and the write will be silently overwritten (TOCTOU).
+		// Acceptable for a single-user personal daemon; set allow_overwrite: true
+		// explicitly if the target environment is shared.
 		if !cfg.Safeguards.AllowOverwrite {
 			escapedPath := strings.ReplaceAll(in.Path, "'", "'\\''")
 			checkResult, checkErr := e.RunCommand(ctx, ssh.RunRequest{Command: "test -e '" + escapedPath + "'"})

@@ -2,7 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -47,6 +50,29 @@ func uploadHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[Upl
 			}, UploadOutput{}, nil
 		}
 
+		// SAFE-01: check whether the remote destination already exists before
+		// uploading. Same gate as writeFileHandler; POSIX single-quote escaped
+		// to prevent shell injection (T-06-11).
+		if !cfg.Safeguards.AllowOverwrite {
+			escapedPath := strings.ReplaceAll(in.RemotePath, "'", "'\\''")
+			checkResult, checkErr := e.RunCommand(ctx, ssh.RunRequest{Command: "test -e '" + escapedPath + "'"})
+			if checkErr != nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: "overwrite check failed: " + checkErr.Error()}},
+				}, UploadOutput{}, nil
+			}
+			if checkResult.ExitCode == 0 {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"remote file %q already exists; set safeguards.allow_overwrite: true to enable overwrite",
+						in.RemotePath,
+					)}},
+				}, UploadOutput{}, nil
+			}
+		}
+
 		if err := e.UploadFile(ctx, in.LocalPath, in.RemotePath); err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
@@ -66,6 +92,20 @@ func downloadHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[D
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: "local path must be absolute"}},
 			}, DownloadOutput{}, nil
+		}
+
+		// SAFE-01: check whether the local destination already exists before
+		// downloading; os.WriteFile would otherwise silently overwrite it.
+		if !cfg.Safeguards.AllowOverwrite {
+			if _, statErr := os.Stat(in.LocalPath); statErr == nil {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"local file %q already exists; set safeguards.allow_overwrite: true to enable overwrite",
+						in.LocalPath,
+					)}},
+				}, DownloadOutput{}, nil
+			}
 		}
 
 		if err := e.DownloadFile(ctx, in.RemotePath, in.LocalPath); err != nil {

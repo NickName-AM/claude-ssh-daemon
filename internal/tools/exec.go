@@ -21,7 +21,8 @@ type ExecInput struct {
 }
 
 // ExecOutput is the structured response for the ssh_exec tool (EXEC-01).
-// All seven fields are always present in the JSON output.
+// The first seven fields are always present in the JSON output.
+// _injection_warning is omitted when no injection patterns are detected (GURD-01).
 type ExecOutput struct {
 	Stdout          string `json:"stdout"`
 	Stderr          string `json:"stderr"`

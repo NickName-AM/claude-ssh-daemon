@@ -18,6 +18,7 @@ import (
 type toolsMockExecutor struct {
 	runResult      ssh.RunResult
 	runErr         error
+	runCalled      bool   // tracks whether RunCommand was invoked
 	readContent    []byte
 	readErr        error
 	encodingResult string
@@ -34,6 +35,7 @@ type toolsMockExecutor struct {
 }
 
 func (m *toolsMockExecutor) RunCommand(_ context.Context, _ ssh.RunRequest) (ssh.RunResult, error) {
+	m.runCalled = true
 	return m.runResult, m.runErr
 }
 func (m *toolsMockExecutor) ReadFile(_ context.Context, _ string) ([]byte, error) {

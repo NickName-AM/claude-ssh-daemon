@@ -35,6 +35,10 @@ var destructiveCommands = map[string]struct{}{
 // basename. It uses filepath.Base to handle path-prefixed commands such as
 // /bin/rm (SAFE-02 Pitfall 6). Returns the matched basename and true when
 // destructive, or ("", false) otherwise.
+//
+// Scope: first-token check only. Shell wrappers such as "sudo rm", "bash -c rm",
+// or "sh -c rm" are NOT blocked — only commands where rm/unlink/truncate/shred/dd
+// appears directly as the first word are caught.
 func isDestructiveCommand(cmd string) (string, bool) {
 	fields := strings.Fields(cmd)
 	if len(fields) == 0 {

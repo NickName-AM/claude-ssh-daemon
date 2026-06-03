@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
 type uploadOutput struct {
@@ -31,6 +33,23 @@ func newFileWriteFullTestServer(t *testing.T, exec *toolsMockExecutor, fileWrite
 		Capabilities: config.Capabilities{
 			FileWrite: fileWrite,
 		},
+		// AllowOverwrite: true keeps existing upload/download tests focused on
+		// the upload/download path rather than the SAFE-01 gate.
+		Safeguards: config.Safeguards{AllowOverwrite: true},
+	}
+	return newTestServer(t, exec, cfg)
+}
+
+func newTransferSafeguardsServer(t *testing.T, exec *toolsMockExecutor) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileWrite: true,
+		},
+		Safeguards: config.Safeguards{AllowOverwrite: false},
 	}
 	return newTestServer(t, exec, cfg)
 }
@@ -225,4 +244,117 @@ func TestFullSevenToolSurface(t *testing.T) {
 		require.True(t, found, "%s must be present in the 7-tool surface", name)
 	}
 	require.Len(t, toolsList.Tools, 7, "exactly 7 tools must be registered when all capabilities enabled")
+}
+
+// TestUploadSafe01BlocksWhenRemoteExists verifies that ssh_upload_file returns
+// IsError=true when allow_overwrite is false and the remote target exists
+// (RunCommand test -e exits 0). UploadFile must NOT be called.
+func TestUploadSafe01BlocksWhenRemoteExists(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{ExitCode: 0}}
+	cs := newTransferSafeguardsServer(t, mock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "upload must be blocked when remote target exists (SAFE-01)")
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "/remote/dest.txt", "error must name the remote path")
+	require.Contains(t, text.Text, "safeguards.allow_overwrite", "error must name the config key")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called when gate blocks")
+}
+
+// TestUploadSafe01AllowsWhenRemoteAbsent verifies that upload proceeds when
+// allow_overwrite is false and the remote target is absent (test -e exits 1).
+func TestUploadSafe01AllowsWhenRemoteAbsent(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{ExitCode: 1}}
+	cs := newTransferSafeguardsServer(t, mock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/new.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload must proceed when remote target is absent")
+	require.True(t, mock.uploadCalled, "UploadFile must be called when file is absent")
+}
+
+// TestUploadSafe01AllowOverwriteTrue verifies that upload skips the existence
+// check and proceeds when allow_overwrite is true, even when test -e would return 0.
+func TestUploadSafe01AllowOverwriteTrue(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{ExitCode: 0}}
+	cfg := &config.Config{
+		SSHSocket:    "/tmp/test.sock",
+		SSHUser:      "user",
+		SSHHost:      "host",
+		Capabilities: config.Capabilities{FileWrite: true},
+		Safeguards:   config.Safeguards{AllowOverwrite: true},
+	}
+	cs := newTestServer(t, mock, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload must proceed when allow_overwrite is true")
+	require.True(t, mock.uploadCalled, "UploadFile must be called when allow_overwrite is true")
+}
+
+// TestDownloadSafe01BlocksWhenLocalExists verifies that ssh_download_file returns
+// IsError=true when allow_overwrite is false and the local destination already
+// exists. DownloadFile must NOT be called.
+func TestDownloadSafe01BlocksWhenLocalExists(t *testing.T) {
+	// Use a path that reliably exists on any machine.
+	existingPath := t.TempDir() + "/existing.txt"
+	require.NoError(t, os.WriteFile(existingPath, []byte("x"), 0o600))
+
+	mock := &toolsMockExecutor{}
+	cs := newTransferSafeguardsServer(t, mock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  existingPath,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "download must be blocked when local target exists (SAFE-01)")
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, existingPath, "error must name the local path")
+	require.Contains(t, text.Text, "safeguards.allow_overwrite", "error must name the config key")
+	require.False(t, mock.downloadCalled, "DownloadFile must NOT be called when gate blocks")
+}
+
+// TestDownloadSafe01AllowsWhenLocalAbsent verifies that download proceeds when
+// allow_overwrite is false and the local destination does not exist.
+func TestDownloadSafe01AllowsWhenLocalAbsent(t *testing.T) {
+	absentPath := t.TempDir() + "/nonexistent.txt"
+
+	mock := &toolsMockExecutor{}
+	cs := newTransferSafeguardsServer(t, mock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  absentPath,
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "download must proceed when local target is absent")
+	require.True(t, mock.downloadCalled, "DownloadFile must be called when file is absent")
 }

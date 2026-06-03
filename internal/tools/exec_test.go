@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -221,9 +222,7 @@ func TestSafe02BlocksDestructiveCommandByDefault(t *testing.T) {
 	require.True(t, ok)
 	require.Contains(t, text.Text, "rm", "error must name the destructive command")
 	require.Contains(t, text.Text, "safeguards.allow_delete", "error must name the config key")
-
-	// Executor must not have been called.
-	require.Empty(t, mock.runResult.Stdout, "executor RunCommand must not have been called")
+	require.False(t, mock.runCalled, "executor RunCommand must not have been called")
 }
 
 // TestSafe02BlocksPathPrefixedDestructiveCommand verifies that "/bin/rm file"
@@ -241,6 +240,7 @@ func TestSafe02BlocksPathPrefixedDestructiveCommand(t *testing.T) {
 	text, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	require.Contains(t, text.Text, "rm")
+	require.False(t, mock.runCalled, "executor RunCommand must not have been called")
 }
 
 // TestSafe02AllowsDestructiveCommandWhenEnabled verifies that "rm -rf /tmp/x"
@@ -373,4 +373,32 @@ func TestGurdCleanOutputNoWarning(t *testing.T) {
 	var out execOutput
 	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
 	require.Empty(t, out.InjectionWarning, "_injection_warning must be absent for clean output")
+}
+
+// TestGurd01CustomPatternInStdout verifies that a user-supplied CompiledPatterns
+// entry fires _injection_warning with category "custom", exercising the
+// custom-patterns branch of ScanWithPatterns through the full handler path (WR-04).
+func TestGurd01CustomPatternInStdout(t *testing.T) {
+	mock := &toolsMockExecutor{
+		runResult: ssh.RunResult{Stdout: "EXFILTRATE_SECRET", ExitCode: 0},
+	}
+	cs := newExecSafeguardsServer(t, mock, config.Safeguards{
+		GuardDisabled:    false,
+		CompiledPatterns: []*regexp.Regexp{regexp.MustCompile(`EXFILTRATE_SECRET`)},
+	})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "cat /tmp/exfil"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "custom pattern hit must NOT set IsError (GURD-01)")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	var out execOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.NotEmpty(t, out.InjectionWarning, "_injection_warning must be set for custom pattern")
+	require.Contains(t, out.InjectionWarning, "custom", "warning must name the 'custom' category")
+	require.NotContains(t, out.InjectionWarning, "EXFILTRATE_SECRET", "warning must NOT echo matched text (GURD-01)")
 }
