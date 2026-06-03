@@ -41,6 +41,8 @@ func isDestructiveCommand(cmd string) (string, bool) {
 		return "", false
 	}
 	base := filepath.Base(fields[0])
-	_, ok := destructiveCommands[base]
-	return base, ok
+	if _, ok := destructiveCommands[base]; ok {
+		return base, true
+	}
+	return "", false
 }

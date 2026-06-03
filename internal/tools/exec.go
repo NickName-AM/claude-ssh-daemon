@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/guard"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -21,13 +23,14 @@ type ExecInput struct {
 // ExecOutput is the structured response for the ssh_exec tool (EXEC-01).
 // All seven fields are always present in the JSON output.
 type ExecOutput struct {
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMs int64  `json:"duration_ms"`
-	TimedOut   bool   `json:"timed_out"`
-	Command    string `json:"command"`
-	Cwd        string `json:"cwd"`
+	Stdout          string `json:"stdout"`
+	Stderr          string `json:"stderr"`
+	ExitCode        int    `json:"exit_code"`
+	DurationMs      int64  `json:"duration_ms"`
+	TimedOut        bool   `json:"timed_out"`
+	Command         string `json:"command"`
+	Cwd             string `json:"cwd"`
+	InjectionWarning string `json:"_injection_warning,omitempty"`
 }
 
 // execHandler returns a ToolHandlerFor closure for the ssh_exec tool.
@@ -39,6 +42,18 @@ type ExecOutput struct {
 //   - Dead socket / subprocess failure (RunCommand returns non-nil error) → IsError=true.
 func execHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ExecInput, ExecOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ExecInput) (*mcp.CallToolResult, ExecOutput, error) {
+		// SAFE-02: block destructive commands before touching the executor.
+		if !cfg.Safeguards.AllowDelete {
+			if name, ok := isDestructiveCommand(in.Command); ok {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("command %q is blocked: matches destructive pattern; set safeguards.allow_delete: true to allow", name),
+					}},
+				}, ExecOutput{}, nil
+			}
+		}
+
 		result, err := e.RunCommand(ctx, ssh.RunRequest{
 			Command:        in.Command,
 			Cwd:            in.Cwd,
@@ -62,6 +77,18 @@ func execHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ExecI
 			Command:    in.Command,
 			Cwd:        in.Cwd,
 		}
+
+		// GURD-01/02: scan stdout then stderr; first hit wins. Never set IsError —
+		// injection annotation is advisory only (Pitfall 5). Matched text is never
+		// reflected; formatInjectionWarning uses only category+count (GURD-01).
+		if !cfg.Safeguards.GuardDisabled {
+			if r := guard.ScanWithPatterns(out.Stdout, cfg.Safeguards.CompiledPatterns); r.Matches != nil {
+				out.InjectionWarning = formatInjectionWarning(r)
+			} else if r := guard.ScanWithPatterns(out.Stderr, cfg.Safeguards.CompiledPatterns); r.Matches != nil {
+				out.InjectionWarning = formatInjectionWarning(r)
+			}
+		}
+
 		// Return nil *CallToolResult so SDK auto-populates Content from out (EXEC-01).
 		// Non-zero ExitCode is a normal result — IsError remains false (EXEC-03).
 		return nil, out, nil
