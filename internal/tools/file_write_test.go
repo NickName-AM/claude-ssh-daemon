@@ -34,7 +34,8 @@ func newFileWriteTestServer(t *testing.T, exec *toolsMockExecutor, fileWrite boo
 			AllowOverwrite: true,
 		},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // TestWriteFileUTF8 verifies that utf-8 content is passed to WriteFile as-is.
@@ -140,7 +141,7 @@ func TestWriteFileOverwriteBlockedWhenFileExists(t *testing.T) {
 			AllowOverwrite: false,
 		},
 	}
-	cs := newTestServer(t, mock, cfg)
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "ssh_write_file",
@@ -176,7 +177,7 @@ func TestWriteFileAllowedWhenFileAbsent(t *testing.T) {
 			AllowOverwrite: false,
 		},
 	}
-	cs := newTestServer(t, mock, cfg)
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "ssh_write_file",
@@ -215,7 +216,7 @@ func TestWriteFileAllowOverwriteTrue(t *testing.T) {
 			AllowOverwrite: true,
 		},
 	}
-	cs := newTestServer(t, mock, cfg)
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "ssh_write_file",
@@ -252,7 +253,7 @@ func TestWriteFileOverwriteCheckError(t *testing.T) {
 			AllowOverwrite: false,
 		},
 	}
-	cs := newTestServer(t, mock, cfg)
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "ssh_write_file",

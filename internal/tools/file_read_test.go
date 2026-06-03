@@ -29,7 +29,8 @@ func newFileReadTestServer(t *testing.T, exec *toolsMockExecutor, fileRead bool)
 			FileRead: fileRead,
 		},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 func newFileReadTestServerWithSafeguards(t *testing.T, exec *toolsMockExecutor, s config.Safeguards) *mcp.ClientSession {
@@ -43,7 +44,8 @@ func newFileReadTestServerWithSafeguards(t *testing.T, exec *toolsMockExecutor, 
 		},
 		Safeguards: s,
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // TestReadFileTextEncoding verifies that a text file (us-ascii encoding) is

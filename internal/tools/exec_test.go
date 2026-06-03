@@ -36,7 +36,8 @@ func newExecTestServer(t *testing.T, exec ssh.SSHExecutor, capExec bool) *mcp.Cl
 			Exec: capExec,
 		},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // TestSSHExecSuccessExitZero verifies that execHandler returns IsError=false and
@@ -200,7 +201,8 @@ func newExecSafeguardsServer(t *testing.T, exec ssh.SSHExecutor, safeguards conf
 		},
 		Safeguards: safeguards,
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // TestSafe02BlocksDestructiveCommandByDefault verifies that "rm -rf /tmp/x"
@@ -401,4 +403,107 @@ func TestGurd01CustomPatternInStdout(t *testing.T) {
 	require.NotEmpty(t, out.InjectionWarning, "_injection_warning must be set for custom pattern")
 	require.Contains(t, out.InjectionWarning, "custom", "warning must name the 'custom' category")
 	require.NotContains(t, out.InjectionWarning, "EXFILTRATE_SECRET", "warning must NOT echo matched text (GURD-01)")
+}
+
+// newMultiHostExecServer builds a test server with a two-host registry (web + db)
+// for multi-host routing tests (MHST-05, MHST-06, MHST-07, MHST-08).
+func newMultiHostExecServer(t *testing.T, webMock, dbMock *toolsMockExecutor) (*mcp.ClientSession, *config.Config) {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "web",
+		Hosts: map[string]config.HostConfig{
+			"web": {Socket: "/tmp/ssh-web.sock", User: "ubuntu", Host: "web.example.com"},
+			"db":  {Socket: "/tmp/ssh-db.sock", User: "ubuntu", Host: "db.example.com"},
+		},
+		Capabilities: config.Capabilities{Exec: true},
+	}
+	registry := map[string]ssh.SSHExecutor{
+		"web": webMock,
+		"db":  dbMock,
+	}
+	return newTestServer(t, registry, cfg), cfg
+}
+
+// TestSSHExecKnownHostRouting verifies that calling ssh_exec with "host":"web"
+// routes to the web mock executor (MHST-05) and NOT the db mock.
+func TestSSHExecKnownHostRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "web-out\n", ExitCode: 0}}
+	dbMock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "db-out\n", ExitCode: 0}}
+	cs, _ := newMultiHostExecServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "hostname", "host": "web"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "known host must not set isError")
+	require.True(t, webMock.runCalled, "web mock must have been called (MHST-05)")
+	require.False(t, dbMock.runCalled, "db mock must NOT have been called")
+}
+
+// TestSSHExecDefaultRouting verifies that omitting the host parameter routes to
+// the default_host executor (MHST-06).
+func TestSSHExecDefaultRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostExecServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "uptime"},
+		// No "host" field — should route to default_host ("web")
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "default routing must not set isError")
+	require.True(t, webMock.runCalled, "web (default) mock must have been called (MHST-06)")
+	require.False(t, dbMock.runCalled, "db mock must NOT have been called for default routing")
+}
+
+// TestSSHExecUnknownHostReturnsIsError verifies that calling ssh_exec with an
+// unknown host param returns IsError=true with the host name and the sorted
+// list of configured hosts (MHST-07).
+func TestSSHExecUnknownHostReturnsIsError(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostExecServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "whoami", "host": "nope"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "unknown host must set isError (MHST-07)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, `unknown host "nope"`, "error must name the requested host")
+	require.Contains(t, text.Text, "db", "error must list configured hosts")
+	require.Contains(t, text.Text, "web", "error must list configured hosts")
+	require.False(t, webMock.runCalled, "executor must not be called for unknown host")
+	require.False(t, dbMock.runCalled, "executor must not be called for unknown host")
+}
+
+// TestSSHExecHostPrefixedOnExecutorError verifies that when the resolved executor
+// returns an error, the error text is prefixed with "[host <name>]" (MHST-08).
+func TestSSHExecHostPrefixedOnExecutorError(t *testing.T) {
+	webMock := &toolsMockExecutor{
+		runErr: errors.New("socket dead: no such file or directory"),
+	}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostExecServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "echo hi", "host": "web"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "executor error must set isError")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host web]", "error must be prefixed with [host web] (MHST-08)")
+	require.Contains(t, text.Text, "socket dead", "error must contain the original error message")
 }

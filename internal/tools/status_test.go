@@ -63,22 +63,16 @@ func (m *toolsMockExecutor) CheckSocket(_ context.Context) error {
 	return m.checkErr
 }
 
-// statusOutput mirrors the JSON fields of StatusOutput for assertion.
-type statusOutput struct {
-	Connected  bool   `json:"connected"`
-	SocketPath string `json:"socket_path"`
-	Hint       string `json:"hint"`
-}
-
 // newTestServer builds a test MCP server with tools registered, connects a
-// client via InMemoryTransport, and returns both the client session and a
-// cleanup function. Pattern from internal/daemon/daemon_test.go.
-func newTestServer(t *testing.T, exec ssh.SSHExecutor, cfg *config.Config) *mcp.ClientSession {
+// client via InMemoryTransport, and returns the client session.
+// registry is a map[string]ssh.SSHExecutor built by each per-tool helper.
+// Pattern from internal/daemon/daemon_test.go; updated for multi-host (Phase 7).
+func newTestServer(t *testing.T, registry map[string]ssh.SSHExecutor, cfg *config.Config) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test"}, nil)
-	RegisterTools(server, exec, cfg)
+	RegisterTools(server, registry, cfg)
 
 	cTransport, sTransport := mcp.NewInMemoryTransports()
 
@@ -94,6 +88,31 @@ func newTestServer(t *testing.T, exec ssh.SSHExecutor, cfg *config.Config) *mcp.
 	return cs
 }
 
+// singleHostRegistry builds a single-host registry and corresponding cfg.Hosts
+// for backward-compat single-host tests (default routing, MHST-06).
+// The cfg is modified in-place to set Hosts and DefaultHost fields.
+func singleHostRegistry(exec ssh.SSHExecutor, cfg *config.Config) map[string]ssh.SSHExecutor {
+	cfg.Hosts = map[string]config.HostConfig{
+		"default": {Socket: cfg.SSHSocket, User: cfg.SSHUser, Host: cfg.SSHHost},
+	}
+	cfg.DefaultHost = "default"
+	return map[string]ssh.SSHExecutor{"default": exec}
+}
+
+// hostStatusOut mirrors HostStatus JSON for assertion in status tests.
+type hostStatusOut struct {
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+	Socket    string `json:"socket"`
+	Hint      string `json:"hint"`
+}
+
+// statusOutputV2 mirrors StatusOutput JSON for assertion in status tests (D-09).
+type statusOutputV2 struct {
+	DefaultHost string          `json:"default_host"`
+	Hosts       []hostStatusOut `json:"hosts"`
+}
+
 // TestSSHConnectionStatusToolRegistered verifies that ssh_connection_status
 // appears in tools/list with readOnlyHint true when capabilities are all false.
 // The tool must always be registered regardless of capability toggles (diagnostic).
@@ -103,7 +122,8 @@ func TestSSHConnectionStatusToolRegistered(t *testing.T) {
 		SSHUser:   "user",
 		SSHHost:   "host",
 	}
-	cs := newTestServer(t, &toolsMockExecutor{}, cfg)
+	registry := singleHostRegistry(&toolsMockExecutor{}, cfg)
+	cs := newTestServer(t, registry, cfg)
 
 	tools, err := cs.ListTools(context.Background(), nil)
 	require.NoError(t, err)
@@ -120,17 +140,17 @@ func TestSSHConnectionStatusToolRegistered(t *testing.T) {
 	require.True(t, found, "ssh_connection_status must be in tools/list")
 }
 
-// TestSSHConnectionStatusLiveSocket verifies that when CheckSocket returns nil
-// (socket alive), the tool returns connected:true, the correct socket_path,
-// and result.IsError == false.
-func TestSSHConnectionStatusLiveSocket(t *testing.T) {
+// TestSSHConnectionStatusSingleHostLiveSocket verifies that when CheckSocket returns
+// nil (socket alive), the tool returns connected:true for the single host and
+// result.IsError == false. Uses the v2.0 schema (D-09).
+func TestSSHConnectionStatusSingleHostLiveSocket(t *testing.T) {
 	cfg := &config.Config{
 		SSHSocket: "/tmp/test-live.sock",
 		SSHUser:   "user",
 		SSHHost:   "host",
 	}
-	// CheckErr is nil — socket is alive.
-	cs := newTestServer(t, &toolsMockExecutor{checkErr: nil}, cfg)
+	registry := singleHostRegistry(&toolsMockExecutor{checkErr: nil}, cfg)
+	cs := newTestServer(t, registry, cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "ssh_connection_status",
@@ -143,25 +163,28 @@ func TestSSHConnectionStatusLiveSocket(t *testing.T) {
 	text, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok, "content[0] must be *mcp.TextContent")
 
-	var out statusOutput
+	var out statusOutputV2
 	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
-	require.True(t, out.Connected, "connected must be true for live socket")
-	require.Equal(t, cfg.SSHSocket, out.SocketPath, "socket_path must match config")
+	require.Equal(t, "default", out.DefaultHost, "default_host must be 'default'")
+	require.Len(t, out.Hosts, 1, "single-host config must produce one host entry")
+	require.Equal(t, "default", out.Hosts[0].Name)
+	require.True(t, out.Hosts[0].Connected, "connected must be true for live socket")
+	require.Equal(t, cfg.SSHSocket, out.Hosts[0].Socket, "socket must match config")
 }
 
-// TestSSHConnectionStatusDeadSocket verifies that when CheckSocket returns an error
-// (socket dead), the tool returns connected:false, a non-empty hint containing
-// the socket path, and result.IsError == false (CONN-01: dead socket is a normal
-// diagnostic answer, not a tool failure).
-func TestSSHConnectionStatusDeadSocket(t *testing.T) {
+// TestSSHConnectionStatusSingleHostDeadSocket verifies that when CheckSocket
+// returns an error, the tool returns connected:false with a non-empty hint and
+// result.IsError == false (CONN-01: dead socket is a normal diagnostic answer).
+// Uses the v2.0 schema (D-09).
+func TestSSHConnectionStatusSingleHostDeadSocket(t *testing.T) {
 	cfg := &config.Config{
 		SSHSocket: "/tmp/test-dead.sock",
 		SSHUser:   "user",
 		SSHHost:   "host",
 	}
-	// CheckErr set — socket is dead.
 	deadErr := errors.New("ControlMaster socket /tmp/test-dead.sock is not alive: run 'ssh -M -S /tmp/test-dead.sock user@host' to re-establish")
-	cs := newTestServer(t, &toolsMockExecutor{checkErr: deadErr}, cfg)
+	registry := singleHostRegistry(&toolsMockExecutor{checkErr: deadErr}, cfg)
+	cs := newTestServer(t, registry, cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "ssh_connection_status",
@@ -174,21 +197,73 @@ func TestSSHConnectionStatusDeadSocket(t *testing.T) {
 	text, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok, "content[0] must be *mcp.TextContent")
 
-	var out statusOutput
+	var out statusOutputV2
 	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
-	require.False(t, out.Connected, "connected must be false for dead socket")
-	require.Equal(t, cfg.SSHSocket, out.SocketPath, "socket_path must match config")
-	require.Contains(t, out.Hint, cfg.SSHSocket, "hint must contain the socket path")
+	require.Equal(t, "default", out.DefaultHost)
+	require.Len(t, out.Hosts, 1)
+	require.Equal(t, "default", out.Hosts[0].Name)
+	require.False(t, out.Hosts[0].Connected, "connected must be false for dead socket")
+	require.Equal(t, cfg.SSHSocket, out.Hosts[0].Socket)
+	require.Contains(t, out.Hosts[0].Hint, cfg.SSHSocket, "hint must contain the socket path")
+}
 
-	// StructuredContent must mirror the text content — returning StatusOutput{}
-	// (empty) instead of the populated out would leave these fields blank.
-	// InMemoryTransport round-trips through JSON so StructuredContent arrives as map[string]any.
-	sc, ok := result.StructuredContent.(map[string]any)
-	require.True(t, ok, "StructuredContent must be map[string]any after transport round-trip")
-	require.Equal(t, false, sc["connected"], "structuredContent.connected must be false")
-	require.Equal(t, cfg.SSHSocket, sc["socket_path"], "structuredContent.socket_path must match config")
-	hint, _ := sc["hint"].(string)
-	require.Contains(t, hint, cfg.SSHSocket, "structuredContent.hint must contain the socket path")
+// TestSSHConnectionStatusMultiHostSortedOutput verifies that when multiple hosts
+// are configured, the status response lists them in sorted order with per-host
+// connected/socket/hint fields (MHST-09).
+func TestSSHConnectionStatusMultiHostSortedOutput(t *testing.T) {
+	webSock := "/tmp/ssh-web.sock"
+	dbSock := "/tmp/ssh-db.sock"
+
+	webMock := &toolsMockExecutor{checkErr: nil}
+	dbDeadErr := errors.New("ControlMaster socket /tmp/ssh-db.sock is not alive: run 'ssh ...' to re-establish")
+	dbMock := &toolsMockExecutor{checkErr: dbDeadErr}
+
+	registry := map[string]ssh.SSHExecutor{
+		"web": webMock,
+		"db":  dbMock,
+	}
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "web",
+		Hosts: map[string]config.HostConfig{
+			"web": {Socket: webSock, User: "ubuntu", Host: "web.example.com"},
+			"db":  {Socket: dbSock, User: "ubuntu", Host: "db.example.com"},
+		},
+	}
+
+	cs := newTestServer(t, registry, cfg)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_connection_status",
+		Arguments: map[string]any{},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "multi-host status must not set isError even with dead hosts (CONN-01)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out statusOutputV2
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+
+	// DefaultHost must be "web" (the configured default)
+	require.Equal(t, "web", out.DefaultHost)
+
+	// Hosts must be in sorted order: db before web
+	require.Len(t, out.Hosts, 2, "must have exactly 2 host entries")
+	require.Equal(t, "db", out.Hosts[0].Name, "sorted: db must come before web")
+	require.Equal(t, "web", out.Hosts[1].Name, "sorted: web must come after db")
+
+	// db is dead
+	require.False(t, out.Hosts[0].Connected, "db must be connected:false")
+	require.NotEmpty(t, out.Hosts[0].Hint, "dead db must have a non-empty hint")
+	require.Equal(t, dbSock, out.Hosts[0].Socket, "db socket must match config")
+
+	// web is live
+	require.True(t, out.Hosts[1].Connected, "web must be connected:true")
+	require.Empty(t, out.Hosts[1].Hint, "live web must have empty hint")
+	require.Equal(t, webSock, out.Hosts[1].Socket, "web socket must match config")
 }
 
 // TestRegisterToolsCapabilityGating verifies that with all capabilities false,
@@ -200,7 +275,8 @@ func TestRegisterToolsCapabilityGating(t *testing.T) {
 		SSHHost:   "host",
 		// All capabilities default to false.
 	}
-	cs := newTestServer(t, &toolsMockExecutor{}, cfg)
+	registry := singleHostRegistry(&toolsMockExecutor{}, cfg)
+	cs := newTestServer(t, registry, cfg)
 
 	toolsList, err := cs.ListTools(context.Background(), nil)
 	require.NoError(t, err)

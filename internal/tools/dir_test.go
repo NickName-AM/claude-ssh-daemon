@@ -33,7 +33,8 @@ func newListDirTestServer(t *testing.T, exec *toolsMockExecutor, fileRead bool) 
 			FileRead: fileRead,
 		},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 func newListDirTestServerWithSafeguards(t *testing.T, exec *toolsMockExecutor, s config.Safeguards) *mcp.ClientSession {
@@ -47,7 +48,8 @@ func newListDirTestServerWithSafeguards(t *testing.T, exec *toolsMockExecutor, s
 		},
 		Safeguards: s,
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // lsFixture is a representative ls -la output used across multiple tests.

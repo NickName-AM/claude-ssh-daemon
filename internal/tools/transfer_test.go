@@ -37,7 +37,8 @@ func newFileWriteFullTestServer(t *testing.T, exec *toolsMockExecutor, fileWrite
 		// the upload/download path rather than the SAFE-01 gate.
 		Safeguards: config.Safeguards{AllowOverwrite: true},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 func newTransferSafeguardsServer(t *testing.T, exec *toolsMockExecutor) *mcp.ClientSession {
@@ -51,7 +52,8 @@ func newTransferSafeguardsServer(t *testing.T, exec *toolsMockExecutor) *mcp.Cli
 		},
 		Safeguards: config.Safeguards{AllowOverwrite: false},
 	}
-	return newTestServer(t, exec, cfg)
+	registry := singleHostRegistry(exec, cfg)
+	return newTestServer(t, registry, cfg)
 }
 
 // TestUploadAbsolutePath verifies that an absolute local_path calls UploadFile
@@ -223,7 +225,8 @@ func TestFullSevenToolSurface(t *testing.T) {
 			FileWrite: true,
 		},
 	}
-	cs := newTestServer(t, &toolsMockExecutor{}, cfg)
+	mock := &toolsMockExecutor{}
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	toolsList, err := cs.ListTools(context.Background(), nil)
 	require.NoError(t, err)
@@ -298,7 +301,7 @@ func TestUploadSafe01AllowOverwriteTrue(t *testing.T) {
 		Capabilities: config.Capabilities{FileWrite: true},
 		Safeguards:   config.Safeguards{AllowOverwrite: true},
 	}
-	cs := newTestServer(t, mock, cfg)
+	cs := newTestServer(t, singleHostRegistry(mock, cfg), cfg)
 
 	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "ssh_upload_file",
