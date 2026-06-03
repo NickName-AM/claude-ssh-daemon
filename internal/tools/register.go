@@ -14,20 +14,24 @@ import (
 // ssh_connection_status is always registered — it is a diagnostic tool, not
 // capability-gated (CONN-01, RESEARCH.md open question A2 resolved here).
 // Must be called BEFORE the accept loop starts in daemon.Run (Pitfall 3).
-func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config) {
+//
+// registry is a map of host name → executor built from cfg.Hosts in daemon.Run.
+// Tool descriptions, annotations, and capability gating are unchanged (D-06/D-07
+// keep safeguards and capabilities global across all hosts).
+func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg *config.Config) {
 	// Always registered — diagnostic tool, not an SSH operation (CONN-01, DMON-04).
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ssh_connection_status",
 		Description: "Check whether the SSH ControlMaster socket is alive and get a re-establishment hint if it is not",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, statusHandler(exec, cfg))
+	}, statusHandler(registry, cfg))
 
 	if cfg.Capabilities.Exec {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_exec",
 			Description: "Execute a remote shell command via the SSH ControlMaster session",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, execHandler(exec, cfg))
+		}, execHandler(registry, cfg))
 	}
 
 	if cfg.Capabilities.FileRead {
@@ -35,12 +39,12 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 			Name:        "ssh_read_file",
 			Description: "Read the contents of a remote file",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-		}, readFileHandler(exec, cfg))
+		}, readFileHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_list_dir",
 			Description: "List the contents of a remote directory",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-		}, listDirHandler(exec, cfg))
+		}, listDirHandler(registry, cfg))
 	}
 
 	if cfg.Capabilities.FileWrite {
@@ -48,17 +52,17 @@ func RegisterTools(server *mcp.Server, exec ssh.SSHExecutor, cfg *config.Config)
 			Name:        "ssh_write_file",
 			Description: "Write or overwrite a remote file",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, writeFileHandler(exec, cfg))
+		}, writeFileHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_upload_file",
 			Description: "Upload a local file to the remote host",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, uploadHandler(exec, cfg))
+		}, uploadHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_download_file",
 			Description: "Download a remote file to the local machine",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
-		}, downloadHandler(exec, cfg))
+		}, downloadHandler(registry, cfg))
 	}
 }
 

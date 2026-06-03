@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -14,7 +15,8 @@ import (
 
 // ListDirInput holds the parameters for the ssh_list_dir tool.
 type ListDirInput struct {
-	Path string `json:"path" jsonschema:"absolute remote directory path"`
+	Path string `json:"path"           jsonschema:"absolute remote directory path"`
+	Host string `json:"host,omitempty" jsonschema:"named SSH host; omit to use default_host"`
 }
 
 // DirEntry represents a single entry returned by ssh_list_dir (D-05, D-06).
@@ -97,20 +99,27 @@ func parseLsOutput(raw string) []DirEntry {
 }
 
 // listDirHandler returns a ToolHandlerFor closure for the ssh_list_dir tool.
-// It calls e.ListDir, parses the ls -la output, and returns structured entries.
+// It calls exec.ListDir, parses the ls -la output, and returns structured entries.
 //
 // GURD-02: each entry's Name field is scanned for injection patterns. The raw
 // ls -la string is never scanned — permission strings and timestamps would produce
 // false positives (Pitfall 2). On the first match, InjectionWarning is set via
 // formatInjectionWarning and scanning stops (one warning is sufficient). Injection
 // hits never set IsError (GURD-01 annotation only).
-func listDirHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ListDirInput, ListDirOutput] {
+func listDirHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ListDirInput, ListDirOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListDirInput) (*mcp.CallToolResult, ListDirOutput, error) {
-		raw, err := e.ListDir(ctx, in.Path)
+		// MHST-05/06/07: resolve the executor for the requested host.
+		exec, hostName, errResult := resolveExecutor(registry, cfg, in.Host)
+		if errResult != nil {
+			return errResult, ListDirOutput{}, nil
+		}
+
+		raw, err := exec.ListDir(ctx, in.Path)
 		if err != nil {
+			// MHST-08: prefix error with resolved host name.
 			return &mcp.CallToolResult{
 				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("[host %s] %s", hostName, err.Error())}},
 			}, ListDirOutput{}, nil
 		}
 

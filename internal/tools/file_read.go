@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -13,7 +14,8 @@ import (
 
 // ReadFileInput holds the parameters for the ssh_read_file tool.
 type ReadFileInput struct {
-	Path string `json:"path" jsonschema:"absolute remote file path"`
+	Path string `json:"path"           jsonschema:"absolute remote file path"`
+	Host string `json:"host,omitempty" jsonschema:"named SSH host; omit to use default_host"`
 }
 
 // ReadFileOutput is the structured response for ssh_read_file.
@@ -32,21 +34,29 @@ type ReadFileOutput struct {
 // Binary (base64) content is never scanned — base64 cannot carry meaningful
 // injection text and scanning raw bytes would be misleading (Pitfall 1).
 // Injection hits set InjectionWarning but never set IsError (GURD-01).
-func readFileHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ReadFileInput, ReadFileOutput] {
+func readFileHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ReadFileInput, ReadFileOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ReadFileInput) (*mcp.CallToolResult, ReadFileOutput, error) {
-		enc, err := e.DetectEncoding(ctx, in.Path)
+		// MHST-05/06/07: resolve the executor for the requested host.
+		exec, hostName, errResult := resolveExecutor(registry, cfg, in.Host)
+		if errResult != nil {
+			return errResult, ReadFileOutput{}, nil
+		}
+
+		enc, err := exec.DetectEncoding(ctx, in.Path)
 		if err != nil {
+			// MHST-08: prefix error with resolved host name.
 			return &mcp.CallToolResult{
 				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("[host %s] %s", hostName, err.Error())}},
 			}, ReadFileOutput{}, nil
 		}
 
-		content, err := e.ReadFile(ctx, in.Path)
+		content, err := exec.ReadFile(ctx, in.Path)
 		if err != nil {
+			// MHST-08: prefix error with resolved host name.
 			return &mcp.CallToolResult{
 				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+				Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("[host %s] %s", hostName, err.Error())}},
 			}, ReadFileOutput{}, nil
 		}
 

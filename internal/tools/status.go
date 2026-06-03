@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -10,62 +9,50 @@ import (
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
-// StatusInput has no input parameters — ssh_connection_status takes no arguments.
+// StatusInput has no input parameters — ssh_connection_status is exempt from
+// the optional host parameter (D-08). It always checks all configured hosts.
 type StatusInput struct{}
 
-// StatusOutput is the structured response for ssh_connection_status.
-// connected:   true if the ControlMaster socket is alive.
-// socket_path: the configured SSH socket path (helps user identify which to fix).
-// hint:        non-empty when connected is false; contains the re-establishment command.
+// HostStatus represents the connection status of a single named SSH host (D-09).
+type HostStatus struct {
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+	Socket    string `json:"socket"`
+	Hint      string `json:"hint,omitempty"`
+}
+
+// StatusOutput is the structured response for ssh_connection_status (D-09).
+// DefaultHost names the host used when tools omit the host parameter.
+// Hosts contains per-host connection status in sorted order.
+// Old top-level connected/socket_path/hint fields are removed (D-10).
 type StatusOutput struct {
-	Connected  bool   `json:"connected"`
-	SocketPath string `json:"socket_path"`
-	Hint       string `json:"hint"`
+	DefaultHost string       `json:"default_host"`
+	Hosts       []HostStatus `json:"hosts"`
 }
 
 // statusHandler returns a ToolHandlerFor closure for the ssh_connection_status tool.
-// It calls e.CheckSocket to probe the ControlMaster socket liveness.
+// It checks all configured hosts in sorted order and returns per-host connection status.
 //
 // CONN-01 / DMON-04: a dead socket is a normal, expected diagnostic answer.
 // The handler MUST return IsError=false for a dead socket — only set IsError for
 // unexpected tool failures (not for the expected "socket is dead" outcome).
-func statusHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[StatusInput, StatusOutput] {
+// D-08: ssh_connection_status takes no host parameter — it always checks all hosts.
+func statusHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[StatusInput, StatusOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ StatusInput) (*mcp.CallToolResult, StatusOutput, error) {
-		err := e.CheckSocket(ctx)
-		if err == nil {
-			// Socket is alive — return connected:true.
-			out := StatusOutput{
-				Connected:  true,
-				SocketPath: cfg.SSHSocket,
-				Hint:       "",
+		names := sortedKeys(registry)
+		statuses := make([]HostStatus, 0, len(names))
+		for _, name := range names {
+			exec := registry[name]
+			hs := HostStatus{Name: name, Socket: cfg.Hosts[name].Socket}
+			if err := exec.CheckSocket(ctx); err == nil {
+				hs.Connected = true
+			} else {
+				hs.Hint = err.Error()
 			}
-			// Return nil *CallToolResult so SDK auto-populates Content from out.
-			return nil, out, nil
+			statuses = append(statuses, hs)
 		}
-
-		// Socket is dead — return connected:false with a re-establishment hint.
-		// Do NOT set IsError:true — this is a diagnostic result, not a tool failure.
-		// The hint already contains the re-establishment command (from CheckSocket).
-		out := StatusOutput{
-			Connected:  false,
-			SocketPath: cfg.SSHSocket,
-			Hint:       err.Error(),
-		}
-
-		// Marshal manually so we can return a *CallToolResult with IsError=false explicitly.
-		// Returning nil *CallToolResult would also work (SDK defaults IsError to false),
-		// but being explicit guards against future SDK behavior changes.
-		b, marshalErr := json.Marshal(out)
-		if marshalErr != nil {
-			// This should never happen for a simple struct; surface as tool error if it does.
-			return &mcp.CallToolResult{
-				IsError: true,
-				Content: []mcp.Content{&mcp.TextContent{Text: marshalErr.Error()}},
-			}, StatusOutput{}, nil
-		}
-		return &mcp.CallToolResult{
-			IsError: false,
-			Content: []mcp.Content{&mcp.TextContent{Text: string(b)}},
-		}, out, nil
+		// Return nil *CallToolResult so SDK auto-populates Content from StatusOutput.
+		// No manual JSON marshal needed (unlike the old v1.x dead-socket path — Pitfall 1).
+		return nil, StatusOutput{DefaultHost: cfg.DefaultHost, Hosts: statuses}, nil
 	}
 }
