@@ -20,6 +20,7 @@ type listDirOutput struct {
 		Permissions string `json:"permissions"`
 		Mtime       string `json:"mtime"`
 	} `json:"entries"`
+	InjectionWarning string `json:"_injection_warning"`
 }
 
 func newListDirTestServer(t *testing.T, exec *toolsMockExecutor, fileRead bool) *mcp.ClientSession {
@@ -31,6 +32,20 @@ func newListDirTestServer(t *testing.T, exec *toolsMockExecutor, fileRead bool) 
 		Capabilities: config.Capabilities{
 			FileRead: fileRead,
 		},
+	}
+	return newTestServer(t, exec, cfg)
+}
+
+func newListDirTestServerWithSafeguards(t *testing.T, exec *toolsMockExecutor, s config.Safeguards) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		SSHSocket: "/tmp/test.sock",
+		SSHUser:   "user",
+		SSHHost:   "host",
+		Capabilities: config.Capabilities{
+			FileRead: true,
+		},
+		Safeguards: s,
 	}
 	return newTestServer(t, exec, cfg)
 }
@@ -185,4 +200,83 @@ func TestListDirPresentWithReadOnlyHintWhenCapFileReadTrue(t *testing.T) {
 		}
 	}
 	require.True(t, found, "ssh_list_dir must appear when file_read capability is true")
+}
+
+// lsInjectionFixture is an ls -la listing that includes a file with an
+// injection-pattern name. Used to verify per-entry-name scanning.
+const lsInjectionFixture = `total 8
+drwxr-xr-x  2 user group 4096 Jan  2 03:04 .
+drwxr-xr-x 10 user group 4096 Jan  2 03:04 ..
+-rw-r--r--  1 user group  512 Jan  2 03:04 <tool_call>
+-rw-r--r--  1 user group  256 Jan  2 03:04 normal.txt
+`
+
+// TestListDirEntryNameInjectionWarningSet verifies that when a directory entry
+// name contains an injection pattern, _injection_warning contains the category
+// ("xml_tool_tags"), IsError is false, and no permission/timestamp text appears
+// in the warning (GURD-02, per-entry-name scan, not raw ls output).
+func TestListDirEntryNameInjectionWarningSet(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsInjectionFixture}
+	cs := newListDirTestServerWithSafeguards(t, mock, config.Safeguards{GuardDisabled: false})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/remote/dir"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "injection hit must NOT set isError (GURD-01 annotation only)")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out listDirOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.NotEmpty(t, out.InjectionWarning, "_injection_warning must be set for injection entry name")
+	require.Contains(t, out.InjectionWarning, "xml_tool_tags", "warning must name the matched category")
+	// Warning must not contain permission strings, dates, or raw ls fields.
+	require.NotContains(t, out.InjectionWarning, "rw-r--r--", "permission strings must not appear in warning")
+	require.NotContains(t, out.InjectionWarning, "Jan", "date fields must not appear in warning")
+}
+
+// TestListDirCleanListingNoInjectionWarning verifies that a realistic ls -la
+// fixture with permission strings, dates, and normal filenames does not produce
+// a false positive _injection_warning (per-entry-name scan avoids raw output).
+func TestListDirCleanListingNoInjectionWarning(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsFixture}
+	cs := newListDirTestServerWithSafeguards(t, mock, config.Safeguards{GuardDisabled: false})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/remote/dir"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out listDirOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.Empty(t, out.InjectionWarning, "_injection_warning must be absent for clean filenames (no false positive on permissions/dates)")
+}
+
+// TestListDirGuardDisabledNoWarning verifies that GuardDisabled=true suppresses
+// _injection_warning even when an entry name contains an injection pattern.
+func TestListDirGuardDisabledNoWarning(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsInjectionFixture}
+	cs := newListDirTestServerWithSafeguards(t, mock, config.Safeguards{GuardDisabled: true})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/remote/dir"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var out listDirOutput
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
+	require.Empty(t, out.InjectionWarning, "_injection_warning must be absent when guard is disabled")
 }

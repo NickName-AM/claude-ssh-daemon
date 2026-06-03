@@ -8,6 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/guard"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -27,7 +28,8 @@ type DirEntry struct {
 
 // ListDirOutput is the structured response for ssh_list_dir.
 type ListDirOutput struct {
-	Entries []DirEntry `json:"entries"`
+	Entries          []DirEntry `json:"entries"`
+	InjectionWarning string     `json:"_injection_warning,omitempty"`
 }
 
 // parseLsLine parses a single line from ls -la output into a DirEntry.
@@ -96,6 +98,12 @@ func parseLsOutput(raw string) []DirEntry {
 
 // listDirHandler returns a ToolHandlerFor closure for the ssh_list_dir tool.
 // It calls e.ListDir, parses the ls -la output, and returns structured entries.
+//
+// GURD-02: each entry's Name field is scanned for injection patterns. The raw
+// ls -la string is never scanned — permission strings and timestamps would produce
+// false positives (Pitfall 2). On the first match, InjectionWarning is set via
+// formatInjectionWarning and scanning stops (one warning is sufficient). Injection
+// hits never set IsError (GURD-01 annotation only).
 func listDirHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[ListDirInput, ListDirOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListDirInput) (*mcp.CallToolResult, ListDirOutput, error) {
 		raw, err := e.ListDir(ctx, in.Path)
@@ -105,6 +113,22 @@ func listDirHandler(e ssh.SSHExecutor, cfg *config.Config) mcp.ToolHandlerFor[Li
 				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 			}, ListDirOutput{}, nil
 		}
-		return nil, ListDirOutput{Entries: parseLsOutput(raw)}, nil
+
+		out := ListDirOutput{Entries: parseLsOutput(raw)}
+
+		// GURD-02: scan each entry Name individually. Scanning entry.Name (not the
+		// raw ls -la string) prevents permission strings and timestamps from
+		// triggering false positives (Pitfall 2). Break on first hit — one warning
+		// is sufficient. Matched text is never reflected (GURD-01 invariant).
+		if !cfg.Safeguards.GuardDisabled {
+			for _, entry := range out.Entries {
+				if r := guard.ScanWithPatterns(entry.Name, cfg.Safeguards.CompiledPatterns); r.Matches != nil {
+					out.InjectionWarning = formatInjectionWarning(r)
+					break
+				}
+			}
+		}
+
+		return nil, out, nil
 	}
 }
