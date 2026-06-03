@@ -4,10 +4,58 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestHostConfigJSONTags verifies the HostConfig type exists with the correct JSON tags.
+func TestHostConfigJSONTags(t *testing.T) {
+	h := HostConfig{
+		Socket: "/tmp/ssh.sock",
+		User:   "ubuntu",
+		Host:   "example.com",
+	}
+	data, err := json.Marshal(h)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"socket"`)
+	require.Contains(t, string(data), `"user"`)
+	require.Contains(t, string(data), `"host"`)
+
+	// Verify field names via reflection to ensure JSON tags are correct.
+	rt := reflect.TypeOf(HostConfig{})
+	socketField, ok := rt.FieldByName("Socket")
+	require.True(t, ok, "HostConfig must have Socket field")
+	require.Equal(t, "socket", socketField.Tag.Get("json"), "Socket field must have json:\"socket\" tag")
+	userField, ok := rt.FieldByName("User")
+	require.True(t, ok, "HostConfig must have User field")
+	require.Equal(t, "user", userField.Tag.Get("json"), "User field must have json:\"user\" tag")
+	hostField, ok := rt.FieldByName("Host")
+	require.True(t, ok, "HostConfig must have Host field")
+	require.Equal(t, "host", hostField.Tag.Get("json"), "Host field must have json:\"host\" tag")
+}
+
+// TestConfigHostsAndDefaultHostFields verifies the Config struct has the new v2.0 fields.
+func TestConfigHostsAndDefaultHostFields(t *testing.T) {
+	rt := reflect.TypeOf(Config{})
+	hostsField, ok := rt.FieldByName("Hosts")
+	require.True(t, ok, "Config must have Hosts field")
+	require.Equal(t, "hosts,omitempty", hostsField.Tag.Get("json"), "Hosts must have json:\"hosts,omitempty\" tag")
+
+	defaultHostField, ok := rt.FieldByName("DefaultHost")
+	require.True(t, ok, "Config must have DefaultHost field")
+	require.Equal(t, "default_host,omitempty", defaultHostField.Tag.Get("json"), "DefaultHost must have json:\"default_host,omitempty\" tag")
+}
+
+// TestConfigLegacyFieldsRetained verifies SSHSocket, SSHUser, SSHHost remain on Config.
+func TestConfigLegacyFieldsRetained(t *testing.T) {
+	rt := reflect.TypeOf(Config{})
+	for _, name := range []string{"SSHSocket", "SSHUser", "SSHHost"} {
+		_, ok := rt.FieldByName(name)
+		require.True(t, ok, "Config must retain legacy field %s for backward compat", name)
+	}
+}
 
 // TestValidate covers missing ssh_socket, missing mcp_socket, missing ssh_user,
 // missing ssh_host, and valid config.
