@@ -40,7 +40,7 @@ func resolveExecutor(
 			Content: []mcp.Content{&mcp.TextContent{
 				Text: fmt.Sprintf(
 					"unknown host %q; configured hosts: %s",
-					hostParam,
+					name,
 					strings.Join(sortedKeys(registry), ", "),
 				),
 			}},
