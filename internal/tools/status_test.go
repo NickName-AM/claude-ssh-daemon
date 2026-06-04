@@ -90,7 +90,11 @@ func newTestServer(t *testing.T, registry map[string]ssh.SSHExecutor, cfg *confi
 
 // singleHostRegistry builds a single-host registry and corresponding cfg.Hosts
 // for backward-compat single-host tests (default routing, MHST-06).
-// The cfg is modified in-place to set Hosts and DefaultHost fields.
+//
+// CONTRACT: this helper mutates cfg.Hosts and cfg.DefaultHost in place.
+// Callers must not read those fields with pre-call expectations after calling
+// this helper, and must not pass a cfg whose Hosts or DefaultHost fields are
+// checked elsewhere (WR-003: silent mutation can cause confusing test failures).
 func singleHostRegistry(exec ssh.SSHExecutor, cfg *config.Config) map[string]ssh.SSHExecutor {
 	cfg.Hosts = map[string]config.HostConfig{
 		"default": {Socket: cfg.SSHSocket, User: cfg.SSHUser, Host: cfg.SSHHost},
