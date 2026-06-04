@@ -103,6 +103,17 @@ func TestValidate(t *testing.T) {
 		},
 		// Multi-host path — new cases (MHST-03, MHST-04, Open Question 3)
 		{
+			name: "empty string host map key is rejected",
+			cfg: Config{
+				MCPSocket: "/tmp/mcp.sock",
+				Hosts: map[string]HostConfig{
+					"": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+				},
+				DefaultHost: "",
+			},
+			wantErr: "config: host name (map key) must not be empty",
+		},
+		{
 			name: "non-empty hosts missing default_host",
 			cfg: Config{
 				MCPSocket: "/tmp/mcp.sock",
@@ -394,6 +405,12 @@ func TestLoadUsesDefaultPath(t *testing.T) {
 		t.Skip("real config file exists at", configPath, "— skipping to avoid overwrite")
 	}
 
+	// Track whether the directory existed before the test to restore state on cleanup.
+	dirExistedBefore := true
+	if _, statErr := os.Stat(configDir); os.IsNotExist(statErr) {
+		dirExistedBefore = false
+	}
+
 	// Create the config directory and a temporary config file.
 	require.NoError(t, os.MkdirAll(configDir, 0o755))
 	data, err := json.Marshal(Config{
@@ -404,7 +421,12 @@ func TestLoadUsesDefaultPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(configPath, data, 0o600))
-	t.Cleanup(func() { os.Remove(configPath) })
+	t.Cleanup(func() {
+		os.Remove(configPath)
+		if !dirExistedBefore {
+			os.Remove(configDir) // best-effort; leaves directory only if non-empty
+		}
+	})
 
 	cfg, err := Load()
 	require.NoError(t, err)

@@ -148,6 +148,9 @@ func (c *Config) Validate() error {
 		}
 		sort.Strings(keys)
 		for _, name := range keys {
+			if name == "" {
+				return errors.New("config: host name (map key) must not be empty")
+			}
 			h := c.Hosts[name]
 			if h.Socket == "" {
 				return fmt.Errorf("config: hosts[%q].socket is required", name)
