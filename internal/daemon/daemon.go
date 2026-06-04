@@ -160,6 +160,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 			ss.Close()
 		}
 		logger.Warn("drain timeout exceeded; closing active session")
+		// WR-001: wait for the accept goroutine to exit after ss.Close() unblocks
+		// ss.Wait(). Without this bounded wait, the goroutine (activeSess.Store(nil),
+		// conn.Close(), logger.Info) runs concurrently with or after Run() returns,
+		// producing log lines in incorrect order and leaking the goroutine relative
+		// to the Run() call lifetime.
+		postCtx, postCancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer postCancel()
+		select {
+		case <-done:
+		case <-postCtx.Done():
+			logger.Warn("accept goroutine did not exit after session close")
+		}
 	}
 
 	// Remove the socket file so subsequent daemon starts do not fail with
