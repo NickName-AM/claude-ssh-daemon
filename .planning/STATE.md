@@ -2,13 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Tunneling & Access Controls
-status: planning
-last_updated: "2026-06-04"
-last_activity: 2026-06-04
+status: executing
+stopped_at: Roadmap created, ready to begin Phase 8 planning
+last_updated: "2026-06-04T20:11:54.406Z"
+last_activity: 2026-06-04 -- Phase 8 planning complete
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 1
   completed_plans: 0
   percent: 0
 ---
@@ -26,14 +27,15 @@ See: .planning/PROJECT.md (updated 2026-06-04)
 
 Phase: 8 of 11 (Config Schema)
 Plan: —
-Status: Ready to plan
-Last activity: 2026-06-04 — Roadmap created for v2.1 (Phases 8-11)
+Status: Ready to execute
+Last activity: 2026-06-04 -- Phase 8 planning complete
 
 Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0 (this milestone)
 - Average duration: —
 - Total execution time: —
