@@ -32,7 +32,7 @@ Phases 1-7 are complete. See `.planning/milestones/` for archived plans and exec
   3. `base_dir` is path-cleaned at config load time so downstream handlers receive a canonical value without trailing slashes
   4. All existing config files without the new fields continue to load without errors (backward compatibility)
 **Plans**: 1 plan
-- [ ] 08-01-PLAN.md — Extend HostConfig with exec_allowlist/base_dir and validate base_dir at load time
+- [x] 08-01-PLAN.md — Extend HostConfig with exec_allowlist/base_dir and validate base_dir at load time
 
 ### Phase 9: Command Allowlist
 **Goal**: `ssh_exec` enforces per-host command prefix restrictions when `exec_allowlist` is configured
@@ -74,7 +74,7 @@ Phases 1-7 are complete. See `.planning/milestones/` for archived plans and exec
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-7. (Prior milestones) | v1.0–v2.0 | — | Complete | 2026-06-03 |
-| 8. Config Schema | v2.1 | 0/1 | Not started | - |
+| 8. Config Schema | v2.1 | 1/1 | Complete   | 2026-06-04 |
 | 9. Command Allowlist | v2.1 | 0/? | Not started | - |
 | 10. BaseDir Path Sandbox | v2.1 | 0/? | Not started | - |
 | 11. Port Forwarding | v2.1 | 0/? | Not started | - |
