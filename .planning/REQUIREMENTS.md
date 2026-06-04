@@ -56,10 +56,20 @@
 
 ## Traceability
 
-*(Filled by roadmapper)*
-
-| REQ-ID | Phase |
-|--------|-------|
-| FWRD-01–07 | — |
-| ALWL-01–04 | — |
-| BDIR-01–04 | — |
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| ALWL-01 | Phase 8 | Pending |
+| ALWL-04 | Phase 8 | Pending |
+| BDIR-04 | Phase 8 | Pending |
+| ALWL-02 | Phase 9 | Pending |
+| ALWL-03 | Phase 9 | Pending |
+| BDIR-01 | Phase 10 | Pending |
+| BDIR-02 | Phase 10 | Pending |
+| BDIR-03 | Phase 10 | Pending |
+| FWRD-01 | Phase 11 | Pending |
+| FWRD-02 | Phase 11 | Pending |
+| FWRD-03 | Phase 11 | Pending |
+| FWRD-04 | Phase 11 | Pending |
+| FWRD-05 | Phase 11 | Pending |
+| FWRD-06 | Phase 11 | Pending |
+| FWRD-07 | Phase 11 | Pending |
