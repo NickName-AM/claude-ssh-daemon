@@ -545,6 +545,12 @@ func TestExecAllowlistThreeStates(t *testing.T) {
 		require.Equal(t, "git ", (*cfg.Hosts["web"].ExecAllowlist)[0],
 			"list element must preserve exact value including trailing space")
 	})
+
+	t.Run("exec_allowlist with empty string entry is rejected (CR-01 security fix)", func(t *testing.T) {
+		_, err := loadFromPath(writeTemp(t, base(`[""]`)))
+		require.EqualError(t, err,
+			`config: hosts["web"].exec_allowlist[0] must not be empty (empty string is a prefix of every command)`)
+	})
 }
 
 // TestExecAllowlistPerHostIndependence verifies that two hosts with different

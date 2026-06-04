@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -80,11 +79,11 @@ type Config struct {
 // Load reads the config from the default path (~/.config/claude-ssh-daemon/config.json),
 // applying tilde expansion via os.UserHomeDir(). Returns a validated Config or an error.
 func Load() (*Config, error) {
-	path, err := configPath()
+	cfgPath, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-	return loadFromPath(path)
+	return loadFromPath(cfgPath)
 }
 
 // loadFromPath reads and validates the config from the given path.
@@ -160,11 +159,21 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("config: hosts[%q].host is required", name)
 			}
 			if h.BaseDir != "" {
-				if !path.IsAbs(h.BaseDir) {
+				if !filepath.IsAbs(h.BaseDir) {
 					return fmt.Errorf("config: hosts[%q].base_dir must be an absolute path, got %q", name, h.BaseDir)
 				}
-				h.BaseDir = path.Clean(h.BaseDir)
+				h.BaseDir = filepath.Clean(h.BaseDir)
 				c.Hosts[name] = h // map values are not addressable; write-back required
+			}
+			if h.ExecAllowlist != nil {
+				for j, entry := range *h.ExecAllowlist {
+					if entry == "" {
+						return fmt.Errorf(
+							"config: hosts[%q].exec_allowlist[%d] must not be empty (empty string is a prefix of every command)",
+							name, j,
+						)
+					}
+				}
 			}
 		}
 		// MHST-04: fail fast if default_host is absent or names a missing key (D-05).
@@ -177,6 +186,8 @@ func (c *Config) Validate() error {
 	}
 
 	// 3. Compile Safeguards patterns (unchanged; runs after host resolution).
+	// Reset before appending so repeated Validate() calls are idempotent.
+	c.Safeguards.CompiledPatterns = nil
 	for i, pat := range c.Safeguards.Patterns {
 		re, err := regexp.Compile(pat)
 		if err != nil {
