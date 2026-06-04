@@ -361,3 +361,227 @@ func TestDownloadSafe01AllowsWhenLocalAbsent(t *testing.T) {
 	require.False(t, result.IsError, "download must proceed when local target is absent")
 	require.True(t, mock.downloadCalled, "DownloadFile must be called when file is absent")
 }
+
+// newMultiHostTransferServer builds a test server with a two-host registry
+// (web + db) for multi-host routing tests on transfer handlers (MHST-05 through
+// MHST-08). AllowOverwrite:true skips the existence-check gate so routing tests
+// focus purely on host resolution and not safeguard behaviour (WR-004).
+func newMultiHostTransferServer(t *testing.T, webMock, dbMock *toolsMockExecutor) (*mcp.ClientSession, *config.Config) {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "web",
+		Hosts: map[string]config.HostConfig{
+			"web": {Socket: "/tmp/ssh-web.sock", User: "ubuntu", Host: "web.example.com"},
+			"db":  {Socket: "/tmp/ssh-db.sock", User: "ubuntu", Host: "db.example.com"},
+		},
+		Capabilities: config.Capabilities{FileWrite: true},
+		Safeguards:   config.Safeguards{AllowOverwrite: true},
+	}
+	registry := map[string]ssh.SSHExecutor{
+		"web": webMock,
+		"db":  dbMock,
+	}
+	return newTestServer(t, registry, cfg), cfg
+}
+
+// TestSSHUploadKnownHostRouting verifies that ssh_upload_file with "host":"web"
+// routes to the web executor and NOT the db executor (MHST-05).
+func TestSSHUploadKnownHostRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+			"host":        "web",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "known host upload must not set isError (MHST-05)")
+	require.True(t, webMock.uploadCalled, "web mock must have been called (MHST-05)")
+	require.False(t, dbMock.uploadCalled, "db mock must NOT have been called")
+}
+
+// TestSSHUploadDefaultRouting verifies that omitting the host parameter on
+// ssh_upload_file routes to the default_host executor (MHST-06).
+func TestSSHUploadDefaultRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+			// No "host" field — should route to default_host ("web").
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "default routing upload must not set isError (MHST-06)")
+	require.True(t, webMock.uploadCalled, "web (default) mock must have been called (MHST-06)")
+	require.False(t, dbMock.uploadCalled, "db mock must NOT have been called for default routing")
+}
+
+// TestSSHUploadUnknownHostReturnsIsError verifies that ssh_upload_file with an
+// unknown host returns IsError=true with the host name and the sorted list of
+// configured hosts (MHST-07).
+func TestSSHUploadUnknownHostReturnsIsError(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+			"host":        "nope",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "unknown host must set isError (MHST-07)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, `unknown host "nope"`, "error must name the requested host")
+	require.Contains(t, text.Text, "db", "error must list configured hosts")
+	require.Contains(t, text.Text, "web", "error must list configured hosts")
+	require.False(t, webMock.uploadCalled, "executor must not be called for unknown host")
+	require.False(t, dbMock.uploadCalled, "executor must not be called for unknown host")
+}
+
+// TestSSHUploadHostPrefixedOnExecutorError verifies that when the resolved
+// executor returns an error for ssh_upload_file, the error is prefixed with
+// "[host <name>]" (MHST-08).
+func TestSSHUploadHostPrefixedOnExecutorError(t *testing.T) {
+	webMock := &toolsMockExecutor{
+		uploadErr: errors.New("socket dead: no such file or directory"),
+	}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/remote/dest.txt",
+			"host":        "web",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "executor error must set isError")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host web]", "error must be prefixed with [host web] (MHST-08)")
+	require.Contains(t, text.Text, "socket dead", "error must contain the original error message")
+}
+
+// TestSSHDownloadKnownHostRouting verifies that ssh_download_file with "host":"db"
+// routes to the db executor and NOT the web executor (MHST-05).
+func TestSSHDownloadKnownHostRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	absentPath := t.TempDir() + "/downloaded.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  absentPath,
+			"host":        "db",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "known host download must not set isError (MHST-05)")
+	require.True(t, dbMock.downloadCalled, "db mock must have been called (MHST-05)")
+	require.False(t, webMock.downloadCalled, "web mock must NOT have been called")
+}
+
+// TestSSHDownloadDefaultRouting verifies that omitting the host parameter on
+// ssh_download_file routes to the default_host executor (MHST-06).
+func TestSSHDownloadDefaultRouting(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	absentPath := t.TempDir() + "/downloaded.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  absentPath,
+			// No "host" field — should route to default_host ("web").
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "default routing download must not set isError (MHST-06)")
+	require.True(t, webMock.downloadCalled, "web (default) mock must have been called (MHST-06)")
+	require.False(t, dbMock.downloadCalled, "db mock must NOT have been called for default routing")
+}
+
+// TestSSHDownloadUnknownHostReturnsIsError verifies that ssh_download_file with
+// an unknown host returns IsError=true with the host name and the sorted list of
+// configured hosts (MHST-07).
+func TestSSHDownloadUnknownHostReturnsIsError(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  "/tmp/dest.txt",
+			"host":        "nope",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "unknown host must set isError (MHST-07)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, `unknown host "nope"`, "error must name the requested host")
+	require.Contains(t, text.Text, "db", "error must list configured hosts")
+	require.Contains(t, text.Text, "web", "error must list configured hosts")
+	require.False(t, webMock.downloadCalled, "executor must not be called for unknown host")
+	require.False(t, dbMock.downloadCalled, "executor must not be called for unknown host")
+}
+
+// TestSSHDownloadHostPrefixedOnExecutorError verifies that when the resolved
+// executor returns an error for ssh_download_file, the error is prefixed with
+// "[host <name>]" (MHST-08).
+func TestSSHDownloadHostPrefixedOnExecutorError(t *testing.T) {
+	webMock := &toolsMockExecutor{
+		downloadErr: errors.New("socket dead: no such file or directory"),
+	}
+	dbMock := &toolsMockExecutor{}
+	cs, _ := newMultiHostTransferServer(t, webMock, dbMock)
+
+	absentPath := t.TempDir() + "/dest.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/file.txt",
+			"local_path":  absentPath,
+			"host":        "web",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "executor error must set isError")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host web]", "error must be prefixed with [host web] (MHST-08)")
+	require.Contains(t, text.Text, "socket dead", "error must contain the original error message")
+}
