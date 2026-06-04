@@ -9,9 +9,11 @@
   2. Copy this plist to your LaunchAgents directory:
        cp contrib/com.claude-ssh-daemon.plist ~/Library/LaunchAgents/
 
-  3. Edit ~/Library/LaunchAgents/com.claude-ssh-daemon.plist and replace
-     YOUR_USERNAME in the EnvironmentVariables section with your macOS short
-     username (run `id -un` to find it).
+  3. Edit ~/Library/LaunchAgents/com.claude-ssh-daemon.plist and replace ALL
+     occurrences of YOUR_USERNAME with your macOS short username (run `id -un`).
+     There are two occurrences: StandardErrorPath and EnvironmentVariables/HOME.
+     Quick substitute:
+       sed -i '' "s/YOUR_USERNAME/$(id -un)/g" ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
 
   4. Load and start the service:
        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-ssh-daemon.plist
@@ -45,6 +47,7 @@
     </dict>
 
     <!-- All daemon output (JSON logs) goes to stderr per design; captured here -->
+    <!-- Replace YOUR_USERNAME with your macOS short username (run `id -un`) -->
     <key>StandardErrorPath</key>
     <string>/Users/YOUR_USERNAME/Library/Logs/claude-ssh-daemon.log</string>
 
@@ -53,9 +56,9 @@
     <string>/dev/null</string>
 
     <!--
-      Replace YOUR_USERNAME below with your macOS short username (run `id -un`).
       launchd does not expand ~ in paths, so HOME must be set explicitly so the
       daemon can resolve ~/.config/claude-ssh-daemon/config.json at startup.
+      Replace YOUR_USERNAME with your macOS short username (run `id -un`).
     -->
     <key>EnvironmentVariables</key>
     <dict>

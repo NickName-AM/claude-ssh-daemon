@@ -56,10 +56,21 @@ The daemon should run persistently so it is available whenever Claude Code needs
 
 **Step 5: Register the MCP server with Claude Code**
 
-Replace `/tmp/claude-ssh-daemon.sock` with the `mcp_socket` path from your config.
+Claude Code spawns MCP servers as subprocesses using a restricted PATH that typically does not include Homebrew (`/opt/homebrew/bin`) on macOS. You must use the **full path** to `socat`.
+
+Find the path first:
 
 ```sh
-claude mcp add claude-ssh-daemon socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
+which socat
+# macOS Apple Silicon (Homebrew): /opt/homebrew/bin/socat
+# macOS Intel (Homebrew):         /usr/local/bin/socat
+# Linux (apt/system):             /usr/bin/socat
+```
+
+Then register using that path (replace the path and socket path as needed):
+
+```sh
+claude mcp add claude-ssh-daemon /opt/homebrew/bin/socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
 ```
 
 This registers the server globally (all projects). Verify it connected:
@@ -98,8 +109,8 @@ You should see `claude-ssh-daemon` listed as connected with its tools.
 **Security**
 - Socket created with mode 0600 (owner read/write only)
 - Umask-before-listen pattern to close the race window between `listen()` and `chmod()` (mitigates CVE-2023-45145 class)
-- Capability toggles in config (`exec`, `file_read`, `file_write`, `port_forward`) all default to off
-- Disabled capabilities are never registered -- they do not appear in `tools/list` at all
+- Capability toggles in config (`exec`, `file_read`, `file_write`, `port_forward`) all default to off; disabled tools are never registered
+- Safeguards layer: prompt-injection scanning on all tool output (on by default), overwrite protection for `ssh_write_file` (opt-in), destructive command blocking for `ssh_exec` (opt-in)
 
 ## Roadmap (v2)
 
@@ -112,7 +123,7 @@ Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is
 - Go 1.23+
 - macOS or Linux
 - An SSH ControlMaster session already running (you manage this); OpenSSH 6.0+ recommended (`-O check` requires OpenSSH 5.6+, 6.0+ is a safe documented floor)
-- `socat` for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu)
+- `socat` for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu). Use the **full absolute path** to `socat` in your MCP config — Claude Code spawns servers with a restricted PATH and may not find socat by name alone (see Step 5 above).
 
 ## Build
 
@@ -122,7 +133,9 @@ go build ./cmd/claude-ssh-daemon
 
 ## Config
 
-Create `~/.config/claude-ssh-daemon/config.json`:
+Create `~/.config/claude-ssh-daemon/config.json`.
+
+**Single-host (legacy, still fully supported):**
 
 ```json
 {
@@ -139,9 +152,56 @@ Create `~/.config/claude-ssh-daemon/config.json`:
 }
 ```
 
-`ssh_socket` is the path to your existing ControlMaster socket (the `-S` argument you passed to `ssh -M`). `mcp_socket` is where the daemon will listen for Claude Code. `ssh_user` and `ssh_host` identify the remote target; SSH config aliases in `~/.ssh/config` are supported.
+**Multi-host:**
 
-Capability toggles: only tools for enabled capabilities are registered. Disabled tools are invisible to Claude -- they do not appear in `tools/list`.
+```json
+{
+  "mcp_socket": "/tmp/claude-ssh-daemon.sock",
+  "default_host": "prod",
+  "hosts": {
+    "prod": {
+      "socket": "/tmp/ssh-ctrl-ubuntu@prod.sock",
+      "user": "ubuntu",
+      "host": "prod.example.com"
+    },
+    "staging": {
+      "socket": "/tmp/ssh-ctrl-ubuntu@staging.sock",
+      "user": "ubuntu",
+      "host": "staging.example.com"
+    }
+  },
+  "capabilities": {
+    "exec": true,
+    "file_read": true,
+    "file_write": true,
+    "port_forward": false
+  }
+}
+```
+
+With multi-host config every tool accepts an optional `host` parameter. Omit it to target `default_host`. Each host needs its own ControlMaster session running against its `socket` path.
+
+**Safeguards (optional):**
+
+```json
+{
+  "safeguards": {
+    "guard_disabled": false,
+    "allow_overwrite": false,
+    "allow_delete": false,
+    "patterns": []
+  }
+}
+```
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `guard_disabled` | `false` | When false, stdout/stderr from every tool is scanned for prompt-injection patterns. A warning is appended to the result but the operation is not blocked. |
+| `allow_overwrite` | `false` | When false, `ssh_write_file` refuses to write to paths that already exist on the remote. |
+| `allow_delete` | `false` | When false, `ssh_exec` blocks commands whose first token is `rm`, `unlink`, `truncate`, `shred`, or `dd`. |
+| `patterns` | `[]` | Additional regex strings appended to the built-in injection-detection ruleset. |
+
+Capability toggles: only tools for enabled capabilities are registered. Disabled tools are invisible to Claude — they do not appear in `tools/list`.
 
 ## Run
 
@@ -155,10 +215,13 @@ The daemon logs to stderr in JSON format. It logs the socket path on startup and
 
 Claude Code speaks MCP over stdio. The daemon listens on a Unix domain socket. A `socat` bridge connects the two -- Claude Code launches `socat`, which forwards its stdin/stdout to the daemon's socket.
 
+**Important:** Claude Code spawns MCP server processes with a restricted PATH that typically does not include Homebrew prefixes on macOS. Always use the **absolute path** to `socat`. Find it with `which socat`.
+
 **Global registration (recommended):**
 
 ```sh
-claude mcp add claude-ssh-daemon socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
+# macOS Apple Silicon — adjust path for your system (see `which socat`)
+claude mcp add claude-ssh-daemon /opt/homebrew/bin/socat -- - UNIX-CONNECT:/tmp/claude-ssh-daemon.sock
 ```
 
 Replace `/tmp/claude-ssh-daemon.sock` with the `mcp_socket` value from your config. This makes the server available in all Claude Code projects.
@@ -172,12 +235,14 @@ Add a `.claude/mcp.json` file in your project directory:
   "mcpServers": {
     "claude-ssh-daemon": {
       "type": "stdio",
-      "command": "socat",
+      "command": "/opt/homebrew/bin/socat",
       "args": ["-", "UNIX-CONNECT:/tmp/claude-ssh-daemon.sock"]
     }
   }
 }
 ```
+
+Adjust the `command` path for your platform (`/usr/local/bin/socat` on Intel Mac, `/usr/bin/socat` on Linux).
 
 Note: Claude Code has no native Unix-socket transport type -- the `stdio` + `socat` bridge is the correct and only approach. A `unix` or `socket` transport key is not supported.
 
