@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -40,10 +41,17 @@ type Safeguards struct {
 // HostConfig holds the connection parameters for a single named SSH host.
 // Field names match ssh.ControlMasterExecutor exactly (Socket, User, Host)
 // so registry construction in daemon.Run maps 1:1 with no impedance mismatch.
+// Optional fields:
+//   - ExecAllowlist: nil means allow-all (absent from JSON); non-nil empty slice
+//     means deny-all; non-nil populated slice means prefix allowlist (ALWL-01).
+//   - BaseDir: if non-empty, must be an absolute POSIX path; cleaned at Validate()
+//     time so downstream handlers always receive a canonical value (BDIR-04).
 type HostConfig struct {
-	Socket string `json:"socket"`
-	User   string `json:"user"`
-	Host   string `json:"host"`
+	Socket        string    `json:"socket"`
+	User          string    `json:"user"`
+	Host          string    `json:"host"`
+	ExecAllowlist *[]string `json:"exec_allowlist,omitempty"`
+	BaseDir       string    `json:"base_dir,omitempty"`
 }
 
 // Config holds the daemon configuration loaded from the JSON config file.
@@ -150,6 +158,13 @@ func (c *Config) Validate() error {
 			}
 			if h.Host == "" {
 				return fmt.Errorf("config: hosts[%q].host is required", name)
+			}
+			if h.BaseDir != "" {
+				if !path.IsAbs(h.BaseDir) {
+					return fmt.Errorf("config: hosts[%q].base_dir must be an absolute path, got %q", name, h.BaseDir)
+				}
+				h.BaseDir = path.Clean(h.BaseDir)
+				c.Hosts[name] = h // map values are not addressable; write-back required
 			}
 		}
 		// MHST-04: fail fast if default_host is absent or names a missing key (D-05).

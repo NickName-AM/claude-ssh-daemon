@@ -497,6 +497,161 @@ func TestSafeguards(t *testing.T) {
 	})
 }
 
+// TestExecAllowlistThreeStates verifies the three-state semantics of ExecAllowlist:
+// absent JSON key → nil pointer (allow-all, ALWL-01), explicit [] → non-nil empty
+// slice (deny-all), and populated list → non-nil slice with entries.
+// JSON round-trip via writeTemp+loadFromPath is required because struct literals
+// cannot reproduce the JSON decoder's nil vs non-nil pointer distinction.
+func TestExecAllowlistThreeStates(t *testing.T) {
+	base := func(allowlistJSON string) string {
+		allowlistField := ""
+		if allowlistJSON != "" {
+			allowlistField = `"exec_allowlist": ` + allowlistJSON + ","
+		}
+		return `{
+			"mcp_socket": "/tmp/claude-ssh.sock",
+			"default_host": "web",
+			"hosts": {
+				"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com",
+				        ` + allowlistField + `
+				        "base_dir": ""}
+			}
+		}`
+	}
+
+	t.Run("absent exec_allowlist key: ExecAllowlist is nil (allow-all)", func(t *testing.T) {
+		cfg, err := loadFromPath(writeTemp(t, base("")))
+		require.NoError(t, err)
+		require.Nil(t, cfg.Hosts["web"].ExecAllowlist,
+			"absent exec_allowlist must decode to nil pointer (allow-all signal, ALWL-01)")
+	})
+
+	t.Run("explicit empty exec_allowlist: ExecAllowlist is non-nil with len 0 (deny-all)", func(t *testing.T) {
+		cfg, err := loadFromPath(writeTemp(t, base("[]")))
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Hosts["web"].ExecAllowlist,
+			"explicit [] must decode to non-nil pointer (deny-all signal)")
+		require.Len(t, *cfg.Hosts["web"].ExecAllowlist, 0,
+			"pointer must point to a zero-length slice")
+	})
+
+	t.Run("populated exec_allowlist: ExecAllowlist is non-nil with correct entry", func(t *testing.T) {
+		cfg, err := loadFromPath(writeTemp(t, base(`["git "]`)))
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Hosts["web"].ExecAllowlist,
+			"populated list must decode to non-nil pointer")
+		require.Len(t, *cfg.Hosts["web"].ExecAllowlist, 1,
+			"pointer must point to a one-element slice")
+		require.Equal(t, "git ", (*cfg.Hosts["web"].ExecAllowlist)[0],
+			"list element must preserve exact value including trailing space")
+	})
+}
+
+// TestExecAllowlistPerHostIndependence verifies that two hosts with different
+// exec_allowlist values each retain their own pointer after Validate (ALWL-04).
+func TestExecAllowlistPerHostIndependence(t *testing.T) {
+	data := `{
+		"mcp_socket": "/tmp/claude-ssh.sock",
+		"default_host": "web",
+		"hosts": {
+			"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com",
+			        "exec_allowlist": ["git "]},
+			"db":  {"socket": "/tmp/ssh-db.sock",  "user": "ubuntu", "host": "db.example.com"}
+		}
+	}`
+	cfg, err := loadFromPath(writeTemp(t, data))
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.Hosts["web"].ExecAllowlist,
+		"web host with exec_allowlist must have non-nil pointer")
+	require.Len(t, *cfg.Hosts["web"].ExecAllowlist, 1)
+
+	require.Nil(t, cfg.Hosts["db"].ExecAllowlist,
+		"db host without exec_allowlist must have nil pointer (ALWL-04 independence)")
+}
+
+// TestBaseDirValidation covers base_dir validation in Validate(): non-absolute rejection
+// and path.Clean normalisation of trailing slashes and double slashes (BDIR-04).
+func TestBaseDirValidation(t *testing.T) {
+	makeHostCfg := func(baseDir string) Config {
+		return Config{
+			MCPSocket: "/tmp/mcp.sock",
+			Hosts: map[string]HostConfig{
+				"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com", BaseDir: baseDir},
+			},
+			DefaultHost: "web",
+		}
+	}
+
+	t.Run("non-absolute base_dir is rejected with exact error", func(t *testing.T) {
+		cfg := makeHostCfg("relative/path")
+		err := cfg.Validate()
+		require.EqualError(t, err, `config: hosts["web"].base_dir must be an absolute path, got "relative/path"`)
+	})
+
+	t.Run("trailing slash is cleaned: /home/ubuntu/ → /home/ubuntu", func(t *testing.T) {
+		cfg := makeHostCfg("/home/ubuntu/")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "/home/ubuntu", cfg.Hosts["web"].BaseDir,
+			"trailing slash must be stripped by path.Clean")
+	})
+
+	t.Run("double slash and trailing slash cleaned: /home/ubuntu//x/ → /home/ubuntu/x", func(t *testing.T) {
+		cfg := makeHostCfg("/home/ubuntu//x/")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "/home/ubuntu/x", cfg.Hosts["web"].BaseDir,
+			"double slash and trailing slash must be normalised by path.Clean")
+	})
+
+	t.Run("empty base_dir is accepted and left empty", func(t *testing.T) {
+		cfg := makeHostCfg("")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "", cfg.Hosts["web"].BaseDir)
+	})
+
+	t.Run("canonical absolute path is accepted unchanged", func(t *testing.T) {
+		cfg := makeHostCfg("/home/ubuntu")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "/home/ubuntu", cfg.Hosts["web"].BaseDir)
+	})
+}
+
+// TestLegacyBackwardCompatNewFields verifies that a legacy auto-seeded config
+// and a multi-host config that omit exec_allowlist and base_dir both load without
+// errors and default the new fields to nil and "" respectively.
+func TestLegacyBackwardCompatNewFields(t *testing.T) {
+	t.Run("legacy auto-seed: ExecAllowlist is nil and BaseDir is empty", func(t *testing.T) {
+		cfg := Config{
+			SSHSocket: "/tmp/ssh.sock",
+			MCPSocket: "/tmp/mcp.sock",
+			SSHUser:   "ubuntu",
+			SSHHost:   "my.server.com",
+		}
+		require.NoError(t, cfg.Validate())
+		require.Nil(t, cfg.Hosts["default"].ExecAllowlist,
+			"auto-seeded host must have nil ExecAllowlist (absent means allow-all)")
+		require.Equal(t, "", cfg.Hosts["default"].BaseDir,
+			"auto-seeded host must have empty BaseDir")
+	})
+
+	t.Run("multi-host config without new fields loads with no error", func(t *testing.T) {
+		data := `{
+			"mcp_socket": "/tmp/mcp.sock",
+			"default_host": "web",
+			"hosts": {
+				"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com"},
+				"db":  {"socket": "/tmp/ssh-db.sock",  "user": "ubuntu", "host": "db.example.com"}
+			}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.Nil(t, cfg.Hosts["web"].ExecAllowlist)
+		require.Equal(t, "", cfg.Hosts["web"].BaseDir)
+		require.Nil(t, cfg.Hosts["db"].ExecAllowlist)
+		require.Equal(t, "", cfg.Hosts["db"].BaseDir)
+	})
+}
+
 // writeTemp writes content to a temporary file and returns its path.
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
