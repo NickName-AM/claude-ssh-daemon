@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -76,6 +77,11 @@ type ControlMasterExecutor struct {
 // Compile-time assertion: ControlMasterExecutor satisfies SSHExecutor.
 var _ SSHExecutor = (*ControlMasterExecutor)(nil)
 
+// posixVarName matches valid POSIX shell variable names.
+// Env keys that do not match are rejected to prevent shell command injection
+// (CR-001: key names were previously passed verbatim into the remote command string).
+var posixVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // clampTimeout clamps TimeoutSeconds to [1, 600], defaulting to 30 when <= 0.
 // Extracted as a testable helper.
 func clampTimeout(t int) int {
@@ -102,9 +108,16 @@ func (e *ControlMasterExecutor) RunCommand(ctx context.Context, req RunRequest) 
 		remote = fmt.Sprintf("cd %s && %s", shellescape(req.Cwd), req.Command)
 	}
 	// Prepend env vars inline: VAR=val cmd (POSIX-portable; no -o SendEnv needed).
+	// CR-001: validate every key against the POSIX variable-name pattern before
+	// building the command string; keys containing shell metacharacters would be
+	// injected verbatim, bypassing the allow_delete safeguard entirely.
 	if len(req.Env) > 0 {
 		var envParts []string
 		for k, v := range req.Env {
+			if !posixVarName.MatchString(k) {
+				return RunResult{}, fmt.Errorf(
+					"invalid env key %q: must match [A-Za-z_][A-Za-z0-9_]*", k)
+			}
 			envParts = append(envParts, fmt.Sprintf("%s=%s", k, shellescape(v)))
 		}
 		remote = strings.Join(envParts, " ") + " " + remote
