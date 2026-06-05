@@ -76,6 +76,6 @@ Phases 1-7 are complete. See `.planning/milestones/` for archived plans and exec
 |-------|-----------|----------------|--------|-----------|
 | 1-7. (Prior milestones) | v1.0–v2.0 | — | Complete | 2026-06-03 |
 | 8. Config Schema | v2.1 | 1/1 | Complete   | 2026-06-04 |
-| 9. Command Allowlist | v2.1 | 0/1 | Planned | - |
+| 9. Command Allowlist | v2.1 | 0/1 | Planned    |  |
 | 10. BaseDir Path Sandbox | v2.1 | 0/? | Not started | - |
 | 11. Port Forwarding | v2.1 | 0/? | Not started | - |
