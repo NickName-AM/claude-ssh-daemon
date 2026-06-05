@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -61,6 +62,40 @@ func execHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.To
 		exec, hostName, errResult := resolveExecutor(registry, cfg, in.Host)
 		if errResult != nil {
 			return errResult, ExecOutput{}, nil
+		}
+
+		// ALWL-01/02/03: per-host exec_allowlist enforcement.
+		// cfg.Hosts[hostName].ExecAllowlist semantics (set by Phase 8 config schema):
+		//   nil              → allow-all (ALWL-01, pass through)
+		//   non-nil, len==0  → deny-all (ALWL-02)
+		//   non-nil, len>0   → prefix-match enforcement (ALWL-03)
+		if allowlist := cfg.Hosts[hostName].ExecAllowlist; allowlist != nil {
+			if len(*allowlist) == 0 {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("[host %s] command rejected: exec_allowlist is empty (all commands blocked)", hostName),
+					}},
+				}, ExecOutput{}, nil
+			}
+			matched := false
+			for _, prefix := range *allowlist {
+				if strings.HasPrefix(in.Command, prefix) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf(
+							"[host %s] command %q not in exec_allowlist; allowed prefixes: %s",
+							hostName, in.Command, strings.Join(*allowlist, ", "),
+						),
+					}},
+				}, ExecOutput{}, nil
+			}
 		}
 
 		result, err := exec.RunCommand(ctx, ssh.RunRequest{

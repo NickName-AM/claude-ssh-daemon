@@ -405,6 +405,162 @@ func TestGurd01CustomPatternInStdout(t *testing.T) {
 	require.NotContains(t, out.InjectionWarning, "EXFILTRATE_SECRET", "warning must NOT echo matched text (GURD-01)")
 }
 
+// newExecAllowlistServer builds a test server with exec_allowlist set on the
+// single default host. cfg.Hosts is built directly (not via singleHostRegistry)
+// to preserve the ExecAllowlist field, which singleHostRegistry overwrites.
+func newExecAllowlistServer(t *testing.T, exec ssh.SSHExecutor, allowlist *[]string) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "default",
+		Hosts: map[string]config.HostConfig{
+			"default": {
+				Socket:        "/tmp/test.sock",
+				User:          "user",
+				Host:          "host",
+				ExecAllowlist: allowlist,
+			},
+		},
+		Capabilities: config.Capabilities{Exec: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"default": exec}
+	return newTestServer(t, registry, cfg)
+}
+
+// TestExecAllowlistNilPassesThrough verifies that nil ExecAllowlist (allow-all)
+// lets any command reach RunCommand with IsError=false (ALWL-01 baseline).
+// Uses a non-destructive command to avoid the SAFE-02 pre-filter.
+func TestExecAllowlistNilPassesThrough(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs := newExecAllowlistServer(t, mock, nil)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls -la"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "nil allowlist must not block any command (ALWL-01)")
+	require.True(t, mock.runCalled, "RunCommand must be reached when allowlist is nil")
+}
+
+// TestExecAllowlistEmptySliceDeniesAll verifies that a non-nil empty slice
+// rejects every command with IsError=true and never reaches RunCommand (ALWL-02).
+// Uses a non-destructive command to ensure SAFE-02 does not fire first.
+func TestExecAllowlistEmptySliceDeniesAll(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newExecAllowlistServer(t, mock, &[]string{})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls -la"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "empty allowlist must reject all commands (ALWL-02)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "exec_allowlist is empty", "error must state allowlist is empty")
+	require.False(t, mock.runCalled, "RunCommand must not be called when allowlist is empty (ALWL-02)")
+}
+
+// TestExecAllowlistPrefixAllowsMatchingCommand verifies that a command matching
+// one of the configured prefixes passes the guard and reaches RunCommand (ALWL-03 allow path).
+func TestExecAllowlistPrefixAllowsMatchingCommand(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs := newExecAllowlistServer(t, mock, &[]string{"git ", "make "})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "git status"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "prefix-matching command must not be blocked (ALWL-03 allow)")
+	require.True(t, mock.runCalled, "RunCommand must be reached for allowed command")
+}
+
+// TestExecAllowlistPrefixRejectsNonMatchingCommand verifies that a command not
+// matching any configured prefix returns IsError=true with the prefix list in
+// the error message, and RunCommand is never called (ALWL-03 reject path).
+// Uses a non-destructive command ("cat file") to avoid SAFE-02 pre-filter.
+func TestExecAllowlistPrefixRejectsNonMatchingCommand(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newExecAllowlistServer(t, mock, &[]string{"git "})
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "cat file"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "non-matching command must be rejected (ALWL-03 reject)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	// Error must name the rejected command so Claude can understand what was blocked.
+	require.Contains(t, text.Text, "cat file", "error must contain the rejected command")
+	// Error must list configured prefixes so Claude can self-correct (ALWL-03 hard requirement).
+	require.Contains(t, text.Text, "git ", "error must list the configured prefix")
+	require.False(t, mock.runCalled, "RunCommand must not be called for rejected command")
+
+	// Negative guard: "some git status" must also be rejected — HasPrefix, not Contains.
+	mockNeg := &toolsMockExecutor{}
+	csNeg := newExecAllowlistServer(t, mockNeg, &[]string{"git "})
+	resultNeg, errNeg := csNeg.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "some git status"},
+	})
+	require.NoError(t, errNeg)
+	require.True(t, resultNeg.IsError, "substring match must not bypass HasPrefix check (ALWL-03)")
+	require.False(t, mockNeg.runCalled, "RunCommand must not be called for substring-matched command")
+}
+
+// newMultiHostAllowlistServer builds a test server where "web" has an allowlist
+// and "db" has nil (allow-all). Used for per-host independence tests.
+func newMultiHostAllowlistServer(t *testing.T, webMock, dbMock *toolsMockExecutor, webAllowlist *[]string) (*mcp.ClientSession, *config.Config) {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "web",
+		Hosts: map[string]config.HostConfig{
+			"web": {Socket: "/tmp/ssh-web.sock", User: "ubuntu", Host: "web.example.com",
+				ExecAllowlist: webAllowlist},
+			"db": {Socket: "/tmp/ssh-db.sock", User: "ubuntu", Host: "db.example.com"},
+		},
+		Capabilities: config.Capabilities{Exec: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"web": webMock, "db": dbMock}
+	return newTestServer(t, registry, cfg), cfg
+}
+
+// TestExecAllowlistPerHostIndependence verifies that two hosts with different
+// allowlists each enforce only their own list. "web" (allowlist ["git "]) rejects
+// "cat secrets" while "db" (nil allowlist) allows the same command.
+// Uses a non-destructive command to avoid SAFE-02 pre-filter interference.
+func TestExecAllowlistPerHostIndependence(t *testing.T) {
+	webMock := &toolsMockExecutor{}
+	dbMock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs, _ := newMultiHostAllowlistServer(t, webMock, dbMock, &[]string{"git "})
+
+	// "cat secrets" on "web" (allowlist ["git "]) must be rejected by the allowlist.
+	resultWeb, errWeb := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "cat secrets", "host": "web"},
+	})
+	require.NoError(t, errWeb)
+	require.True(t, resultWeb.IsError, "web (allowlist=[git ]) must reject 'cat secrets'")
+	require.False(t, webMock.runCalled, "web RunCommand must not be called for rejected command")
+
+	// Same command "cat secrets" on "db" (nil allowlist) must pass through.
+	resultDb, errDb := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "cat secrets", "host": "db"},
+	})
+	require.NoError(t, errDb)
+	require.False(t, resultDb.IsError, "db (nil allowlist) must allow 'cat secrets'")
+	require.True(t, dbMock.runCalled, "db RunCommand must be reached for allowed command")
+}
+
 // newMultiHostExecServer builds a test server with a two-host registry (web + db)
 // for multi-host routing tests (MHST-05, MHST-06, MHST-07, MHST-08).
 func newMultiHostExecServer(t *testing.T, webMock, dbMock *toolsMockExecutor) (*mcp.ClientSession, *config.Config) {
