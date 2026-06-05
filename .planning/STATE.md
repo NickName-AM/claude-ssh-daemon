@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Tunneling & Access Controls
-status: executing
-stopped_at: Roadmap created, ready to begin Phase 8 planning
-last_updated: "2026-06-05T04:41:22.995Z"
+status: ready_to_plan
+stopped_at: Phase 09 complete (0/1) — ready to discuss Phase 10
+last_updated: 2026-06-05T04:56:25.068Z
 last_activity: 2026-06-05 -- Phase 09 execution started
 progress:
   total_phases: 4
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-04)
 
 **Core value:** Claude can execute remote commands through a persistent SSH tunnel via native MCP tools, without managing SSH connection lifecycle or credentials itself.
-**Current focus:** Phase 09 — command-allowlist
+**Current focus:** Phase 10 — basedir path sandbox
 
 ## Current Position
 
-Phase: 09 (command-allowlist) — EXECUTING
-Plan: 1 of 1
-Status: Executing Phase 09
-Last activity: 2026-06-05 -- Phase 09 execution started
+Phase: 10
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-05
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -45,6 +45,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 08 | 1 | - | - |
+| 09 | 0 | - | - |
 
 *Updated after each plan completion*
 
