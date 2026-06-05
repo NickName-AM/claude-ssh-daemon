@@ -40,7 +40,7 @@ Claude can execute remote commands through a persistent SSH tunnel via native MC
 
 ### Active
 - [ ] Port forwarding (local -L, ephemeral): `ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards` — v2.1
-- [ ] Command allowlist (per-host, prefix-match): `hosts[].exec_allowlist` — v2.1
+- ✓ Command allowlist (per-host, prefix-match): `hosts[].exec_allowlist` — v2.1 (Validated in Phase 9: command-allowlist)
 - [ ] Working dir restriction (per-host): `hosts[].base_dir` sandboxes file ops and exec cwd — v2.1
 
 ### Out of Scope
@@ -60,7 +60,7 @@ This project solves a specific friction point: Claude Code needs to run commands
 
 The v1.1 milestone added a guard layer after recognizing that remote servers returning adversarial content (prompt injection) could manipulate Claude through tool responses. The guard scans all response surfaces and annotates suspicious content without blocking the response — except for SAFE-01/02 which block destructive operations by default.
 
-**Current state:** ~7,500 LOC Go, 7 phases complete (v2.0 milestone complete). All 7 MCP tools support multi-host routing; `ssh_connection_status` reports all configured hosts; single-host configs auto-upgrade at startup with no config changes required.
+**Current state:** ~7,800 LOC Go, 9 phases complete (Phase 8: config schema, Phase 9: command allowlist). Per-host `exec_allowlist` enforcement live in `execHandler` with three-state semantics (nil=allow-all, empty=deny-all, prefix-match). All 7 MCP tools support multi-host routing; `ssh_connection_status` reports all configured hosts; single-host configs auto-upgrade at startup with no config changes required.
 **Tech stack:** Go, `github.com/modelcontextprotocol/go-sdk` v1.6.1, `golang.org/x/crypto/ssh` (future), `os/exec` for ControlMaster, `github.com/stretchr/testify` v1.10.0.
 
 ## Constraints
