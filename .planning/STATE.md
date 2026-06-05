@@ -4,14 +4,14 @@ milestone: v2.1
 milestone_name: Tunneling & Access Controls
 status: executing
 stopped_at: Roadmap created, ready to begin Phase 8 planning
-last_updated: "2026-06-04T20:11:54.406Z"
-last_activity: 2026-06-04 -- Phase 8 planning complete
+last_updated: "2026-06-05T04:41:22.995Z"
+last_activity: 2026-06-05 -- Phase 09 execution started
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 1
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-04)
 
 **Core value:** Claude can execute remote commands through a persistent SSH tunnel via native MCP tools, without managing SSH connection lifecycle or credentials itself.
-**Current focus:** Phase 8 — Config Schema (ready to plan)
+**Current focus:** Phase 09 — command-allowlist
 
 ## Current Position
 
-Phase: 8 of 11 (Config Schema)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-06-04 -- Phase 8 planning complete
+Phase: 09 (command-allowlist) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 09
+Last activity: 2026-06-05 -- Phase 09 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 0 (this milestone)
+- Total plans completed: 1 (this milestone)
 - Average duration: —
 - Total execution time: —
 
@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 08 | 1 | - | - |
 
 *Updated after each plan completion*
 
