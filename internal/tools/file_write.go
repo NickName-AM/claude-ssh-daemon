@@ -39,6 +39,21 @@ func writeFileHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) m
 			return errResult, WriteFileOutput{}, nil
 		}
 
+		// BDIR-01/D-07: base_dir sandbox — reject paths that resolve outside the
+		// configured base directory. Guard fires BEFORE the SAFE-01 allow_overwrite
+		// test -e check so out-of-sandbox writes never touch the remote (T-10-06).
+		// Lexical check only — symlinks on the remote are not resolved (BDIR-03).
+		if baseDir := cfg.Hosts[hostName].BaseDir; baseDir != "" {
+			if !withinBaseDir(baseDir, in.Path) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("[host %s] path %q is outside base_dir %q", hostName, in.Path, baseDir),
+					}},
+				}, WriteFileOutput{}, nil
+			}
+		}
+
 		// SAFE-01: when allow_overwrite is false, check whether the remote target
 		// already exists before performing any decode or write. The path is
 		// POSIX single-quote escaped inline to prevent shell injection (T-06-11).
