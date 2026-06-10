@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
 type readFileOutput struct {
@@ -270,4 +271,89 @@ func TestReadFileGuardDisabledNoWarning(t *testing.T) {
 	var out readFileOutput
 	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
 	require.Empty(t, out.InjectionWarning, "_injection_warning must be absent when guard is disabled")
+}
+
+// newBaseDirServer builds a test server with BaseDir set on the "default" host.
+// cfg.Hosts is built directly (not via singleHostRegistry) to preserve the BaseDir
+// field, which singleHostRegistry overwrites (mirrors newExecAllowlistServer pattern).
+func newBaseDirServer(t *testing.T, exec ssh.SSHExecutor, baseDir string) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "default",
+		Hosts: map[string]config.HostConfig{
+			"default": {
+				Socket:  "/tmp/test.sock",
+				User:    "user",
+				Host:    "host",
+				BaseDir: baseDir,
+			},
+		},
+		Capabilities: config.Capabilities{FileRead: true, FileWrite: true},
+		Safeguards:   config.Safeguards{AllowOverwrite: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"default": exec}
+	return newTestServer(t, registry, cfg)
+}
+
+// TestReadFileBaseDirOutsidePathRejected verifies that readFileHandler returns
+// isError:true when the requested path is outside base_dir (BDIR-01, D-03).
+func TestReadFileBaseDirOutsidePathRejected(t *testing.T) {
+	mock := &toolsMockExecutor{encodingResult: "us-ascii", readContent: []byte("secret")}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_read_file",
+		Arguments: map[string]any{"path": "/etc/passwd"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "path outside base_dir must set isError (BDIR-01)")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host default]", "error must include host name prefix")
+	require.Contains(t, text.Text, "outside base_dir", "error must describe the violation")
+	require.Contains(t, text.Text, "/srv/app", "error must include the configured base_dir value (D-03)")
+}
+
+// TestReadFileBaseDirTraversalRejected verifies that a path using "../" traversal
+// that lexically resolves outside base_dir is rejected (BDIR-01).
+func TestReadFileBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{encodingResult: "us-ascii", readContent: []byte("secret")}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_read_file",
+		Arguments: map[string]any{"path": "/srv/app/../etc/passwd"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "traversal path outside base_dir must set isError")
+}
+
+// TestReadFileBaseDirInsidePathPassThrough verifies that a path inside base_dir
+// proceeds to the executor without error (BDIR-01 positive case).
+func TestReadFileBaseDirInsidePathPassThrough(t *testing.T) {
+	mock := &toolsMockExecutor{encodingResult: "us-ascii", readContent: []byte("ok")}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_read_file",
+		Arguments: map[string]any{"path": "/srv/app/conf.txt"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "in-sandbox path must not be rejected")
+}
+
+// TestReadFileBaseDirEmptyNoCheck verifies that when base_dir is empty,
+// readFileHandler proceeds without any sandbox check (unchanged behavior).
+func TestReadFileBaseDirEmptyNoCheck(t *testing.T) {
+	mock := &toolsMockExecutor{encodingResult: "us-ascii", readContent: []byte("ok")}
+	cs := newBaseDirServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_read_file",
+		Arguments: map[string]any{"path": "/etc/passwd"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "empty base_dir must not block any path")
 }

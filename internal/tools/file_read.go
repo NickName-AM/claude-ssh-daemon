@@ -42,6 +42,19 @@ func readFileHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mc
 			return errResult, ReadFileOutput{}, nil
 		}
 
+		// BDIR-01: base_dir sandbox — reject paths that resolve outside the
+		// configured base directory (lexical check, no symlink resolution; BDIR-03).
+		if baseDir := cfg.Hosts[hostName].BaseDir; baseDir != "" {
+			if !withinBaseDir(baseDir, in.Path) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("[host %s] path %q is outside base_dir %q", hostName, in.Path, baseDir),
+					}},
+				}, ReadFileOutput{}, nil
+			}
+		}
+
 		enc, err := exec.DetectEncoding(ctx, in.Path)
 		if err != nil {
 			// MHST-08: prefix error with resolved host name.

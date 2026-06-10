@@ -29,7 +29,7 @@ func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg 
 	if cfg.Capabilities.Exec {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_exec",
-			Description: "Execute a remote shell command via the SSH ControlMaster session",
+			Description: "Execute a remote shell command via the SSH ControlMaster session. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, execHandler(registry, cfg))
 	}
@@ -37,12 +37,12 @@ func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg 
 	if cfg.Capabilities.FileRead {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_read_file",
-			Description: "Read the contents of a remote file",
+			Description: "Read the contents of a remote file. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		}, readFileHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_list_dir",
-			Description: "List the contents of a remote directory",
+			Description: "List the contents of a remote directory. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 		}, listDirHandler(registry, cfg))
 	}
@@ -50,17 +50,17 @@ func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg 
 	if cfg.Capabilities.FileWrite {
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_write_file",
-			Description: "Write or overwrite a remote file",
+			Description: "Write or overwrite a remote file. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, writeFileHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_upload_file",
-			Description: "Upload a local file to the remote host",
+			Description: "Upload a local file to the remote host. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, uploadHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_download_file",
-			Description: "Download a remote file to the local machine",
+			Description: "Download a remote file to the local machine. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, downloadHandler(registry, cfg))
 	}

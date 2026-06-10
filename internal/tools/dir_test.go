@@ -282,3 +282,65 @@ func TestListDirGuardDisabledNoWarning(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text.Text), &out))
 	require.Empty(t, out.InjectionWarning, "_injection_warning must be absent when guard is disabled")
 }
+
+// TestListDirBaseDirOutsidePathRejected verifies that listDirHandler returns
+// isError:true when the requested path is outside base_dir (BDIR-01, D-03).
+func TestListDirBaseDirOutsidePathRejected(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsFixture}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/etc"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "path outside base_dir must set isError (BDIR-01)")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host default]", "error must include host name prefix")
+	require.Contains(t, text.Text, "outside base_dir", "error must describe the violation")
+	require.Contains(t, text.Text, "/srv/app", "error must include the configured base_dir value (D-03)")
+}
+
+// TestListDirBaseDirTraversalRejected verifies that a traversal path that
+// lexically resolves outside base_dir is rejected (BDIR-01).
+func TestListDirBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsFixture}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/srv/app/../etc"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "traversal path outside base_dir must set isError")
+}
+
+// TestListDirBaseDirInsidePathPassThrough verifies that a path inside base_dir
+// proceeds to the executor without error (BDIR-01 positive case).
+func TestListDirBaseDirInsidePathPassThrough(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsFixture}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/srv/app/data"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "in-sandbox path must not be rejected")
+}
+
+// TestListDirBaseDirEmptyNoCheck verifies that when base_dir is empty,
+// listDirHandler proceeds without any sandbox check (unchanged behavior).
+func TestListDirBaseDirEmptyNoCheck(t *testing.T) {
+	mock := &toolsMockExecutor{listResult: lsFixture}
+	cs := newBaseDirServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_list_dir",
+		Arguments: map[string]any{"path": "/etc"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "empty base_dir must not block any path")
+}
