@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/forward"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -72,7 +73,7 @@ func newTestServer(t *testing.T, registry map[string]ssh.SSHExecutor, cfg *confi
 	ctx := context.Background()
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "test"}, nil)
-	RegisterTools(server, registry, cfg)
+	RegisterTools(server, registry, cfg, forward.NewForwarder())
 
 	cTransport, sTransport := mcp.NewInMemoryTransports()
 

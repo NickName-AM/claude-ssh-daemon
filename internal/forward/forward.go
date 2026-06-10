@@ -96,6 +96,14 @@ func Status(entry *ForwardEntry) string {
 	return "running"
 }
 
+// AllocatePort is the exported entry point for port allocation.
+// Exposed so that internal/tools can declare a test seam:
+//
+//	var allocatePortFn = forward.AllocatePort
+//
+// Tests override allocatePortFn to return a fixed port without spawning ssh.
+func AllocatePort() (int, error) { return allocatePort() }
+
 // allocatePort finds a free TCP port on 127.0.0.1 using kernel port-0 assignment.
 // The listener is closed immediately after reading the port so that ssh can bind it.
 //
@@ -112,6 +120,12 @@ func allocatePort() (int, error) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	return port, nil
+}
+
+// StartForward is the exported entry point for launching an ssh -L subprocess.
+// See startForward for full documentation.
+func StartForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*exec.Cmd, error) {
+	return startForward(socket, user, host, localPort, remoteHost, remotePort)
 }
 
 // startForward launches ssh -L as a long-lived background process via os/exec.
@@ -155,6 +169,10 @@ func startForward(socket, user, host string, localPort int, remoteHost string, r
 
 	return cmd, nil
 }
+
+// PollReady is the exported entry point for readiness polling.
+// See pollReady for full documentation.
+func PollReady(localPort int) error { return pollReady(localPort) }
 
 // pollReady polls the local port until ssh binds it or the attempt budget expires.
 // Polls 10 times with 50ms sleep between attempts (500ms total budget) (D-13).

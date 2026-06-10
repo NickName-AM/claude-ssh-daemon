@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/forward"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 )
 
@@ -18,7 +19,7 @@ import (
 // registry is a map of host name → executor built from cfg.Hosts in daemon.Run.
 // Tool descriptions, annotations, and capability gating are unchanged (D-06/D-07
 // keep safeguards and capabilities global across all hosts).
-func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg *config.Config) {
+func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg *config.Config, fwd *forward.Forwarder) {
 	// Always registered — diagnostic tool, not an SSH operation (CONN-01, DMON-04).
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ssh_connection_status",
@@ -63,6 +64,19 @@ func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg 
 			Description: "Download a remote file to the local machine. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, downloadHandler(registry, cfg))
+	}
+
+	if cfg.Capabilities.PortForward {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_forward_port",
+			Description: "Create a local SSH port forward via the host's ControlMaster session. The forward runs until the daemon is restarted; there is no explicit stop tool.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
+		}, forwardPortHandler(registry, cfg, fwd))
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "ssh_list_forwards",
+			Description: "List all SSH port forwards managed by this daemon instance, with running/dead status. Returns an empty list when none exist.",
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+		}, listForwardsHandler(fwd))
 	}
 }
 
