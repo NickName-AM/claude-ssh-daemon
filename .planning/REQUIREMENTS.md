@@ -27,9 +27,9 @@
 
 ### Base Dir Restriction (BDIR)
 
-- [ ] **BDIR-01**: When `hosts[].base_dir` is set, `ssh_read_file`, `ssh_write_file`, `ssh_list_dir`, `ssh_upload_file`, `ssh_download_file` return `isError: true` for any path that resolves outside `base_dir` via lexical `path.Clean` + trailing-slash prefix check
-- [ ] **BDIR-02**: When `base_dir` is set, `ssh_exec` rejects requests where `cwd` resolves outside `base_dir`
-- [ ] **BDIR-03**: Path validation is lexical (`path.Clean` + `strings.HasPrefix` with trailing-slash normalization); remote symlinks are not resolved — limitation documented in tool description, consistent with SAFE-01 precedent
+- [x] **BDIR-01**: When `hosts[].base_dir` is set, `ssh_read_file`, `ssh_write_file`, `ssh_list_dir`, `ssh_upload_file`, `ssh_download_file` return `isError: true` for any path that resolves outside `base_dir` via lexical `path.Clean` + trailing-slash prefix check
+- [x] **BDIR-02**: When `base_dir` is set, `ssh_exec` rejects requests where `cwd` resolves outside `base_dir`
+- [x] **BDIR-03**: Path validation is lexical (`path.Clean` + `strings.HasPrefix` with trailing-slash normalization); remote symlinks are not resolved — limitation documented in tool description, consistent with SAFE-01 precedent
 - [ ] **BDIR-04**: `base_dir` is per-host; absent or empty means no restriction; a non-empty value must be an absolute path, validated and cleaned at daemon startup
 
 ---
@@ -63,9 +63,9 @@
 | BDIR-04 | Phase 8 | Pending |
 | ALWL-02 | Phase 9 | Pending |
 | ALWL-03 | Phase 9 | Pending |
-| BDIR-01 | Phase 10 | Pending |
-| BDIR-02 | Phase 10 | Pending |
-| BDIR-03 | Phase 10 | Pending |
+| BDIR-01 | Phase 10 | Complete |
+| BDIR-02 | Phase 10 | Complete |
+| BDIR-03 | Phase 10 | Complete |
 | FWRD-01 | Phase 11 | Pending |
 | FWRD-02 | Phase 11 | Pending |
 | FWRD-03 | Phase 11 | Pending |
