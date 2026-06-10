@@ -98,6 +98,31 @@ func execHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.To
 			}
 		}
 
+		// BDIR-02/T-10-08 (D-01): when base_dir is set, cwd must not be empty.
+		// An empty cwd has no lexical path to validate, so it is denied rather
+		// than silently bypassing the sandbox.
+		if cfg.Hosts[hostName].BaseDir != "" && in.Cwd == "" {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{
+					Text: fmt.Sprintf("[host %s] cwd is required when base_dir is set", hostName),
+				}},
+			}, ExecOutput{}, nil
+		}
+
+		// BDIR-02/T-10-09 (D-02): when base_dir is set and cwd is non-empty,
+		// the working directory must resolve inside base_dir (lexical check, BDIR-03).
+		if baseDir := cfg.Hosts[hostName].BaseDir; baseDir != "" && in.Cwd != "" {
+			if !withinBaseDir(baseDir, in.Cwd) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf("[host %s] path %q is outside base_dir %q", hostName, in.Cwd, baseDir),
+					}},
+				}, ExecOutput{}, nil
+			}
+		}
+
 		result, err := exec.RunCommand(ctx, ssh.RunRequest{
 			Command:        in.Command,
 			Cwd:            in.Cwd,
