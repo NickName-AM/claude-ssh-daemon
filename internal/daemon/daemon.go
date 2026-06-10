@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/NickName-AM/claude-ssh-daemon/internal/config"
+	"github.com/NickName-AM/claude-ssh-daemon/internal/forward"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/ssh"
 	"github.com/NickName-AM/claude-ssh-daemon/internal/tools"
 )
@@ -125,7 +126,8 @@ func Run(ctx context.Context, cfg *config.Config) error {
 			Host:   h.Host,
 		}
 	}
-	tools.RegisterTools(server, registry, cfg)
+	fwd := forward.NewForwarder()
+	tools.RegisterTools(server, registry, cfg, fwd)
 
 	// activeSess holds the session currently blocked in ss.Wait(), if any.
 	// The accept loop stores/clears it around each session so that the drain
@@ -143,6 +145,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Block until shutdown signal (SIGTERM/SIGINT via signal.NotifyContext).
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
+
+	// Kill all active port forwards before closing the listener (D-07, T-11-08).
+	// KillAll must precede ln.Close() so that live forwards are signaled while
+	// the daemon is still running (Pitfall 6 ordering).
+	fwd.KillAll()
 
 	// Close the listener to unblock any pending Accept() call.
 	ln.Close()
