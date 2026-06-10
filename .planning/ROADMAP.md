@@ -55,7 +55,10 @@ Phases 1-7 are complete. See `.planning/milestones/` for archived plans and exec
   2. `ssh_exec` rejects requests where the `cwd` param resolves outside `base_dir` with `isError: true`
   3. When `base_dir` is absent or empty on a host, all file and exec operations behave identically to before — no restriction applied
   4. The symlink-blind-spot limitation is documented in the tool description (consistent with SAFE-01 precedent)
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 10-01-PLAN.md — Create withinBaseDir lexical-containment helper + tests
+- [ ] 10-02-PLAN.md — Guard read/write/list handlers + document symlink limitation in tool descriptions
+- [ ] 10-03-PLAN.md — Guard upload/download remote_path + exec cwd (empty-cwd rejection and containment)
 
 ### Phase 11: Port Forwarding
 **Goal**: Claude can create, list, and tear down local port forwards to reach remote services, with clean process lifecycle
@@ -77,5 +80,5 @@ Phases 1-7 are complete. See `.planning/milestones/` for archived plans and exec
 | 1-7. (Prior milestones) | v1.0–v2.0 | — | Complete | 2026-06-03 |
 | 8. Config Schema | v2.1 | 1/1 | Complete   | 2026-06-04 |
 | 9. Command Allowlist | v2.1 | 0/1 | Planned    |  |
-| 10. BaseDir Path Sandbox | v2.1 | 0/? | Not started | - |
+| 10. BaseDir Path Sandbox | v2.1 | 0/3 | Planned    |  |
 | 11. Port Forwarding | v2.1 | 0/? | Not started | - |
