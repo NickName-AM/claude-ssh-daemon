@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Tunneling & Access Controls
-status: ready_to_plan
-stopped_at: Phase 09 complete (0/1) — ready to discuss Phase 10
-last_updated: 2026-06-05T04:56:25.068Z
-last_activity: 2026-06-05 -- Phase 09 execution started
+status: planning
+stopped_at: Phase 10 context gathered
+last_updated: "2026-06-10T08:02:09.336Z"
+last_activity: 2026-06-05
 progress:
   total_phases: 4
   completed_phases: 1
@@ -71,6 +71,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-06-04
-Stopped at: Roadmap created, ready to begin Phase 8 planning
-Resume file: None
+Last session: 2026-06-10T08:02:09.326Z
+Stopped at: Phase 10 context gathered
+Resume file: .planning/phases/10-basedir-path-sandbox/10-CONTEXT.md
