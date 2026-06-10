@@ -304,3 +304,86 @@ func TestWriteFilePresentWithDestructiveHintWhenCapFileWriteTrue(t *testing.T) {
 	}
 	require.True(t, found, "ssh_write_file must appear when file_write capability is true")
 }
+
+// TestWriteFileBaseDirOutsidePathRejected verifies that writeFileHandler returns
+// isError:true when the requested path is outside base_dir, and that the rejection
+// fires BEFORE the allow_overwrite check (D-07, BDIR-01, T-10-06).
+func TestWriteFileBaseDirOutsidePathRejected(t *testing.T) {
+	// runResult.ExitCode=0 would normally allow overwrite; we verify the guard
+	// fires before RunCommand is called — runCalled must remain false.
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{ExitCode: 0}}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/etc/x",
+			"content": "evil",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "path outside base_dir must set isError (BDIR-01)")
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host default]", "error must include host name prefix")
+	require.Contains(t, text.Text, "outside base_dir", "error must describe the violation")
+	require.Contains(t, text.Text, "/srv/app", "error must include the configured base_dir value (D-03)")
+	require.False(t, mock.runCalled, "allow_overwrite RunCommand must NOT be called when base_dir guard fires (D-07)")
+	require.Nil(t, mock.writtenContent, "WriteFile must not be called when base_dir guard fires")
+}
+
+// TestWriteFileBaseDirTraversalRejected verifies that a traversal path that
+// lexically resolves outside base_dir is rejected before any SSH I/O (BDIR-01, D-07).
+func TestWriteFileBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{ExitCode: 1}}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/srv/app/../etc/x",
+			"content": "evil",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "traversal path outside base_dir must set isError")
+	require.False(t, mock.runCalled, "RunCommand must not be called when traversal guard fires")
+}
+
+// TestWriteFileBaseDirInsidePathPassThrough verifies that a path inside base_dir
+// proceeds to the write operation (BDIR-01 positive case).
+func TestWriteFileBaseDirInsidePathPassThrough(t *testing.T) {
+	// ExitCode=1 → file absent, so write proceeds even with allow_overwrite=false.
+	// newBaseDirServer sets AllowOverwrite=true so no RunCommand is needed.
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/srv/app/new.txt",
+			"content": "hello",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "in-sandbox path must not be rejected")
+	require.NotNil(t, mock.writtenContent, "WriteFile must be called for in-sandbox path")
+}
+
+// TestWriteFileBaseDirEmptyNoCheck verifies that when base_dir is empty,
+// writeFileHandler proceeds without any sandbox check (unchanged behavior).
+func TestWriteFileBaseDirEmptyNoCheck(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_write_file",
+		Arguments: map[string]any{
+			"path":    "/etc/anywhere",
+			"content": "data",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "empty base_dir must not block any path")
+}
