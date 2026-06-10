@@ -88,6 +88,7 @@ The v1.1 milestone added a guard layer after recognizing that remote servers ret
 | Per-entry scan in listDirHandler | Raw ls output contains permissions/dates that false-positive on pattern matches | ✓ Good |
 | `allow_overwrite` / `allow_delete` default false | Fail-safe: destructive operations require explicit opt-in | ✓ Good |
 | SAFE-01 via `test -e` (not noclobber) | Simpler; TOCTOU race accepted for single-user personal daemon | ⚠️ Revisit if multi-user |
+| `base_dir` containment is lexical-only | Resolving remote symlinks would require extra SSH round-trips per call; blind spot documented in all six tool descriptions | ⚠️ Acceptable for personal daemon |
 
 ## Evolution
 
