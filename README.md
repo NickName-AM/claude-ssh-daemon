@@ -111,6 +111,8 @@ You should see `claude-ssh-daemon` listed as connected with its tools.
 - Umask-before-listen pattern to close the race window between `listen()` and `chmod()` (mitigates CVE-2023-45145 class)
 - Capability toggles in config (`exec`, `file_read`, `file_write`, `port_forward`) all default to off; disabled tools are never registered
 - Safeguards layer: prompt-injection scanning on all tool output (on by default), overwrite protection for `ssh_write_file` (opt-in), destructive command blocking for `ssh_exec` (opt-in)
+- Per-host `base_dir`: lexically confines all file and exec-cwd operations to a directory subtree (opt-in per host)
+- Per-host `exec_allowlist`: restricts `ssh_exec` to a set of command prefixes (opt-in per host)
 
 ## Roadmap (v2)
 
@@ -162,7 +164,9 @@ Create `~/.config/claude-ssh-daemon/config.json`.
     "prod": {
       "socket": "/tmp/ssh-ctrl-ubuntu@prod.sock",
       "user": "ubuntu",
-      "host": "prod.example.com"
+      "host": "prod.example.com",
+      "base_dir": "/srv/app",
+      "exec_allowlist": ["git ", "make ", "npm "]
     },
     "staging": {
       "socket": "/tmp/ssh-ctrl-ubuntu@staging.sock",
@@ -180,6 +184,13 @@ Create `~/.config/claude-ssh-daemon/config.json`.
 ```
 
 With multi-host config every tool accepts an optional `host` parameter. Omit it to target `default_host`. Each host needs its own ControlMaster session running against its `socket` path.
+
+**Per-host optional fields:**
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `base_dir` | `""` (unset) | Absolute path. When set, all file operations (`ssh_read_file`, `ssh_write_file`, `ssh_list_dir`, `ssh_upload_file`, `ssh_download_file`) and `ssh_exec` cwd are confined to this directory tree by lexical path checking. Paths that resolve outside are rejected with `isError: true`. Symlinks on the remote are not resolved and may point outside `base_dir`. |
+| `exec_allowlist` | `null` (allow-all) | JSON array of command prefixes. When `null` or absent: all commands are allowed. When set to `[]` (empty array): all commands are denied. When set to `["git ", "make "]`: only commands whose first token matches a listed prefix are allowed. |
 
 **Safeguards (optional):**
 
