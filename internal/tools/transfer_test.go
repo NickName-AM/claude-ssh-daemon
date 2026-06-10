@@ -585,3 +585,171 @@ func TestSSHDownloadHostPrefixedOnExecutorError(t *testing.T) {
 	require.Contains(t, text.Text, "[host web]", "error must be prefixed with [host web] (MHST-08)")
 	require.Contains(t, text.Text, "socket dead", "error must contain the original error message")
 }
+
+// newBaseDirTransferServer builds a test server with a single "default" host
+// that has BaseDir set. It builds cfg.Hosts directly (not via singleHostRegistry)
+// to preserve the BaseDir field. AllowOverwrite:true keeps tests focused on the
+// base_dir guard rather than the SAFE-01 gate.
+func newBaseDirTransferServer(t *testing.T, exec ssh.SSHExecutor, baseDir string) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "default",
+		Hosts: map[string]config.HostConfig{
+			"default": {
+				Socket:  "/tmp/test.sock",
+				User:    "user",
+				Host:    "host",
+				BaseDir: baseDir,
+			},
+		},
+		Capabilities: config.Capabilities{FileWrite: true, FileRead: true},
+		Safeguards:   config.Safeguards{AllowOverwrite: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"default": exec}
+	return newTestServer(t, registry, cfg)
+}
+
+// TestUploadBaseDirOutsidePathRejected verifies that ssh_upload_file returns
+// IsError:true when remote_path resolves outside base_dir (BDIR-01, T-10-07).
+// The guard must fire before allow_overwrite (D-07) so the mock must NOT be called.
+func TestUploadBaseDirOutsidePathRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/etc/cron.d/x",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "upload outside base_dir must set isError (BDIR-01)")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called when path is outside base_dir")
+	require.False(t, mock.runCalled, "RunCommand (overwrite check) must NOT be called before base_dir guard (D-07)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "[host default]", "error must contain host name")
+	require.Contains(t, text.Text, "outside base_dir", "error must state path is outside base_dir")
+	require.Contains(t, text.Text, "/srv/app", "error must name the base_dir")
+}
+
+// TestUploadBaseDirTraversalRejected verifies that a remote_path using ../ to
+// escape base_dir is rejected (traversal attack, BDIR-01).
+func TestUploadBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/srv/app/../secret",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "upload with traversal path escaping base_dir must set isError (BDIR-01)")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called for traversal path")
+}
+
+// TestUploadBaseDirInsidePathAllowed verifies that ssh_upload_file proceeds when
+// remote_path is inside base_dir (BDIR-01 pass-through).
+func TestUploadBaseDirInsidePathAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/srv/app/deploy/app",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload inside base_dir must not set isError (BDIR-01 pass-through)")
+	require.True(t, mock.uploadCalled, "UploadFile must be called for in-sandbox path")
+}
+
+// TestUploadBaseDirEmptyUnchanged verifies that upload behavior is unchanged when
+// base_dir is empty (no guard applied, BDIR-01 baseline).
+func TestUploadBaseDirEmptyUnchanged(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/file.txt",
+			"remote_path": "/anywhere/file.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload with empty base_dir must not set isError (no guard)")
+	require.True(t, mock.uploadCalled, "UploadFile must be called when base_dir is empty")
+}
+
+// TestDownloadBaseDirTraversalRejected verifies that ssh_download_file returns
+// IsError:true when remote_path uses ../ to escape base_dir (BDIR-01, T-10-07).
+func TestDownloadBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "/srv/app")
+
+	absentPath := t.TempDir() + "/dest.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/srv/app/../secret",
+			"local_path":  absentPath,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "download with traversal escaping base_dir must set isError (BDIR-01)")
+	require.False(t, mock.downloadCalled, "DownloadFile must NOT be called for traversal path")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "outside base_dir", "error must state path is outside base_dir")
+	require.Contains(t, text.Text, "/srv/app", "error must name the base_dir")
+}
+
+// TestDownloadBaseDirInsidePathAllowed verifies that ssh_download_file proceeds
+// when remote_path is inside base_dir (BDIR-01 pass-through).
+func TestDownloadBaseDirInsidePathAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "/srv/app")
+
+	absentPath := t.TempDir() + "/dest.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/srv/app/log.txt",
+			"local_path":  absentPath,
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "download inside base_dir must not set isError (BDIR-01 pass-through)")
+	require.True(t, mock.downloadCalled, "DownloadFile must be called for in-sandbox path")
+}
+
+// TestDownloadBaseDirEmptyUnchanged verifies that download behavior is unchanged
+// when base_dir is empty (no guard applied, BDIR-01 baseline).
+func TestDownloadBaseDirEmptyUnchanged(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirTransferServer(t, mock, "")
+
+	absentPath := t.TempDir() + "/dest.txt"
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/anywhere/file.txt",
+			"local_path":  absentPath,
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "download with empty base_dir must not set isError (no guard)")
+	require.True(t, mock.downloadCalled, "DownloadFile must be called when base_dir is empty")
+}

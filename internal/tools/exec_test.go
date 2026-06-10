@@ -663,3 +663,119 @@ func TestSSHExecHostPrefixedOnExecutorError(t *testing.T) {
 	require.Contains(t, text.Text, "[host web]", "error must be prefixed with [host web] (MHST-08)")
 	require.Contains(t, text.Text, "socket dead", "error must contain the original error message")
 }
+
+// newBaseDirExecServer builds a test server with a single "default" host that
+// has BaseDir set. Builds cfg.Hosts directly (not via singleHostRegistry) to
+// preserve the BaseDir field. Capabilities.Exec is enabled.
+func newBaseDirExecServer(t *testing.T, exec ssh.SSHExecutor, baseDir string) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:   "/tmp/mcp.sock",
+		DefaultHost: "default",
+		Hosts: map[string]config.HostConfig{
+			"default": {
+				Socket:  "/tmp/test.sock",
+				User:    "user",
+				Host:    "host",
+				BaseDir: baseDir,
+			},
+		},
+		Capabilities: config.Capabilities{Exec: true},
+		Safeguards:   config.Safeguards{AllowDelete: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"default": exec}
+	return newTestServer(t, registry, cfg)
+}
+
+// TestExecBaseDirEmptyCwdRejected verifies that ssh_exec returns IsError:true
+// with the exact D-01 message when base_dir is set and cwd is empty (BDIR-02, T-10-08).
+// RunCommand must NOT be called.
+func TestExecBaseDirEmptyCwdRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirExecServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls"},
+		// cwd intentionally omitted (empty string)
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "empty cwd with base_dir set must set isError (BDIR-02, D-01)")
+	require.False(t, mock.runCalled, "RunCommand must NOT be called when cwd guard fires (D-01)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	// D-01 exact message (including host prefix).
+	require.Contains(t, text.Text, "[host default]", "error must contain host name")
+	require.Contains(t, text.Text, "cwd is required when base_dir is set", "D-01 message must match exactly")
+}
+
+// TestExecBaseDirOutsideCwdRejected verifies that ssh_exec returns IsError:true
+// when base_dir is set and cwd resolves outside it (BDIR-02, D-02, T-10-09).
+// RunCommand must NOT be called.
+func TestExecBaseDirOutsideCwdRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newBaseDirExecServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls", "cwd": "/etc"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "cwd outside base_dir must set isError (BDIR-02, D-02)")
+	require.False(t, mock.runCalled, "RunCommand must NOT be called when cwd guard fires (D-02)")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "outside base_dir", "error must state cwd is outside base_dir")
+	require.Contains(t, text.Text, "/srv/app", "error must name the base_dir")
+}
+
+// TestExecBaseDirInsideCwdAllowed verifies that ssh_exec proceeds when cwd is
+// inside base_dir (BDIR-02 pass-through). RunCommand must be called.
+func TestExecBaseDirInsideCwdAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs := newBaseDirExecServer(t, mock, "/srv/app")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls", "cwd": "/srv/app/sub"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "cwd inside base_dir must not set isError (BDIR-02 pass-through)")
+	require.True(t, mock.runCalled, "RunCommand must be called for in-sandbox cwd")
+}
+
+// TestExecBaseDirUnsetEmptyCwdAllowed verifies that ssh_exec proceeds normally
+// when base_dir is empty and cwd is empty — unchanged behavior (BDIR-02 baseline).
+func TestExecBaseDirUnsetEmptyCwdAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs := newBaseDirExecServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls"},
+		// cwd intentionally omitted — unchanged behavior when base_dir is unset
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "empty cwd with base_dir unset must not set isError (baseline)")
+	require.True(t, mock.runCalled, "RunCommand must be called when base_dir is unset")
+}
+
+// TestExecBaseDirUnsetAnyCwdAllowed verifies that ssh_exec proceeds normally
+// when base_dir is empty and cwd is a non-empty path outside any "sandbox"
+// — unchanged behavior (BDIR-02 baseline, no guard).
+func TestExecBaseDirUnsetAnyCwdAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+	cs := newBaseDirExecServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "ssh_exec",
+		Arguments: map[string]any{"command": "ls", "cwd": "/anywhere"},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "any cwd with base_dir unset must not set isError (baseline)")
+	require.True(t, mock.runCalled, "RunCommand must be called when base_dir is unset")
+}

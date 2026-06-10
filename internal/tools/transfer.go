@@ -58,6 +58,21 @@ func uploadHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.
 			}, UploadOutput{}, nil
 		}
 
+		// BDIR-01/T-10-07: base_dir sandbox guard on the remote destination path.
+		// Guard fires before SAFE-01 (allow_overwrite) to fail fast without any
+		// remote SSH I/O (D-07). withinBaseDir is purely lexical (BDIR-03).
+		if baseDir := cfg.Hosts[hostName].BaseDir; baseDir != "" {
+			if !withinBaseDir(baseDir, in.RemotePath) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"[host %s] path %q is outside base_dir %q",
+						hostName, in.RemotePath, baseDir,
+					)}},
+				}, UploadOutput{}, nil
+			}
+		}
+
 		// SAFE-01: check whether the remote destination already exists before
 		// uploading. Same gate as writeFileHandler; POSIX single-quote escaped
 		// to prevent shell injection (T-06-11).
@@ -108,6 +123,21 @@ func downloadHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mc
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: "local path must be absolute"}},
 			}, DownloadOutput{}, nil
+		}
+
+		// BDIR-01/T-10-07: base_dir sandbox guard on the remote source path.
+		// Guard fires before SAFE-01 (allow_overwrite) to fail fast (D-07).
+		// withinBaseDir is purely lexical (BDIR-03).
+		if baseDir := cfg.Hosts[hostName].BaseDir; baseDir != "" {
+			if !withinBaseDir(baseDir, in.RemotePath) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"[host %s] path %q is outside base_dir %q",
+						hostName, in.RemotePath, baseDir,
+					)}},
+				}, DownloadOutput{}, nil
+			}
 		}
 
 		// SAFE-01: check whether the local destination already exists before
