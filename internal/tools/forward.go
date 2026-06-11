@@ -65,6 +65,24 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 			return errResult, ForwardPortOutput{}, nil
 		}
 
+		// Validate required fields before allocating resources (CR-02).
+		if in.RemoteHost == "" {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{
+					Text: "remote_host is required and must not be empty",
+				}},
+			}, ForwardPortOutput{}, nil
+		}
+		if in.RemotePort < 1 || in.RemotePort > 65535 {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{
+					Text: fmt.Sprintf("remote_port must be in [1, 65535], got %d", in.RemotePort),
+				}},
+			}, ForwardPortOutput{}, nil
+		}
+
 		// Step 2: read connection params from the config.
 		h := cfg.Hosts[hostName]
 
@@ -93,7 +111,7 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 		}
 
 		// Step 5: launch the ssh -L subprocess.
-		cmd, err := forward.StartForward(h.Socket, h.User, h.Host, localPort, in.RemoteHost, in.RemotePort)
+		entry, err := forward.StartForward(h.Socket, h.User, h.Host, localPort, in.RemoteHost, in.RemotePort)
 		if err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
@@ -106,14 +124,15 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 		// Step 6: poll until the local port becomes reachable (500ms budget).
 		// Do NOT Store on failure — a stale entry would block future forwards (Pitfall 3, T-11-07).
 		if err := forward.PollReady(localPort); err != nil {
-			// Kill the subprocess before returning (cleanup on failure path).
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+			// Check whether ssh already exited on its own before we kill it (WR-01).
+			// The check must happen before Kill() because Kill() is non-blocking —
+			// the reaper goroutine may not have set exited by the time we check after.
+			alreadyExited := forward.HasExited(entry)
+			if entry.Cmd.Process != nil {
+				_ = entry.Cmd.Process.Kill()
 			}
-			// Open Question 3 (RESOLVED): when the process exited immediately
-			// the ControlMaster socket is the most likely cause.
 			hint := ""
-			if cmd.ProcessState != nil {
+			if alreadyExited {
 				hint = fmt.Sprintf(" (ssh process exited immediately — ControlMaster socket %s may be dead)", h.Socket)
 			}
 			return &mcp.CallToolResult{
@@ -125,14 +144,12 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 		}
 
 		// Step 7: store the entry only after successful readiness check (Pitfall 3, T-11-07).
-		entry := &forward.ForwardEntry{
-			Cmd:        cmd,
-			LocalPort:  localPort,
-			RemoteHost: in.RemoteHost,
-			RemotePort: in.RemotePort,
-			HostName:   hostName,
-			StartedAt:  time.Now(),
-		}
+		// Populate the remaining fields now that we know the forward is live.
+		entry.LocalPort = localPort
+		entry.RemoteHost = in.RemoteHost
+		entry.RemotePort = in.RemotePort
+		entry.HostName = hostName
+		entry.StartedAt = time.Now()
 		fwd.Store(key, entry)
 
 		// Return nil *CallToolResult so SDK auto-populates Content from out.
