@@ -65,17 +65,14 @@ func TestKillAllNilSafe(t *testing.T) {
 }
 
 // TestStatusRunningVsDead verifies Status() correctly distinguishes exited vs
-// not-yet-exited processes using cmd.ProcessState (D-06).
+// not-yet-exited processes using the atomic exited flag (D-06, CR-01).
 func TestStatusRunningVsDead(t *testing.T) {
-	// Dead: start "true" and wait so ProcessState is non-nil.
-	cmdDead := exec.Command("true")
-	require.NoError(t, cmdDead.Start())
-	require.NoError(t, cmdDead.Wait())
-	dead := &ForwardEntry{Cmd: cmdDead}
+	// Dead: entry with exited flag set (mirrors what the reaper goroutine does).
+	dead := &ForwardEntry{Cmd: exec.Command("true")}
+	dead.exited.Store(true)
 	require.Equal(t, "dead", Status(dead), "exited process must have status 'dead'")
 
-	// Running: freshly created, never Started — ProcessState is nil.
-	cmdRunning := exec.Command("true")
-	running := &ForwardEntry{Cmd: cmdRunning}
+	// Running: freshly created entry — exited flag is false.
+	running := &ForwardEntry{Cmd: exec.Command("true")}
 	require.Equal(t, "running", Status(running), "unstarted process must have status 'running'")
 }

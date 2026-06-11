@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,7 @@ type ForwardEntry struct {
 	RemotePort int
 	HostName   string
 	StartedAt  time.Time
+	exited     atomic.Bool // set to true by the reaper goroutine after cmd.Wait() returns
 }
 
 // Forwarder is a mutex-protected registry of active ForwardEntry instances.
@@ -59,6 +61,15 @@ func (f *Forwarder) Store(key string, entry *ForwardEntry) {
 	f.entries[key] = entry
 }
 
+// Delete removes the entry for key from the registry.
+// Callers can use this to evict dead entries (status "dead") to prevent
+// unbounded accumulation in long-running daemon processes (WR-03).
+func (f *Forwarder) Delete(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.entries, key)
+}
+
 // Snapshot returns a copied slice of all current entries for safe iteration.
 // The returned slice is always non-nil — an empty registry yields []ForwardEntry{},
 // which marshals to JSON [] rather than null (Pitfall 7).
@@ -76,21 +87,28 @@ func (f *Forwarder) Snapshot() []*ForwardEntry {
 // Called by daemon.Run in the shutdown path (D-07).
 // Kill() is a non-blocking signal send — it does not wait for exit.
 // Do NOT call cmd.Wait() here; each forward has its own background Wait goroutine
-// (started in startForward) that reaps the process and populates ProcessState.
+// (started in startForward) that reaps the process and sets entry.exited.
 func (f *Forwarder) KillAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, entry := range f.entries {
-		if entry.Cmd.Process != nil && entry.Cmd.ProcessState == nil {
+		if entry.Cmd.Process != nil && !entry.exited.Load() {
 			_ = entry.Cmd.Process.Kill()
 		}
 	}
 }
 
-// Status returns "dead" if the process has exited (ProcessState is non-nil after
-// the background Wait goroutine reaps it), or "running" otherwise (D-06, D-10).
+// HasExited reports whether the ssh subprocess has already exited.
+// The reaper goroutine sets this atomically after cmd.Wait() returns.
+// Use HasExited instead of reading cmd.ProcessState directly to avoid data races.
+func HasExited(entry *ForwardEntry) bool {
+	return entry.exited.Load()
+}
+
+// Status returns "dead" if the process has exited (the reaper goroutine has
+// set entry.exited after cmd.Wait() returns), or "running" otherwise (D-06, D-10).
 func Status(entry *ForwardEntry) string {
-	if entry.Cmd.ProcessState != nil {
+	if entry.exited.Load() {
 		return "dead"
 	}
 	return "running"
@@ -124,7 +142,7 @@ func allocatePort() (int, error) {
 
 // StartForward is the exported entry point for launching an ssh -L subprocess.
 // See startForward for full documentation.
-func StartForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*exec.Cmd, error) {
+func StartForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
 	return startForward(socket, user, host, localPort, remoteHost, remotePort)
 }
 
@@ -143,9 +161,9 @@ func StartForward(socket, user, host string, localPort int, remoteHost string, r
 // literals at compile time regardless of the enclosing branch).
 //
 // After a successful Start, a background goroutine calls cmd.Wait() so the
-// process is reaped when it exits and cmd.ProcessState is populated for the
-// D-06 liveness check (Pitfall 4).
-func startForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*exec.Cmd, error) {
+// process is reaped when it exits. entry.exited is set atomically to avoid
+// data races on ProcessState (CR-01, Pitfall 4).
+func startForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
 	lSpec := fmt.Sprintf("%d:%s:%d", localPort, remoteHost, remotePort)
 	cmd := exec.Command("ssh",
 		"-L", lSpec,
@@ -163,11 +181,19 @@ func startForward(socket, user, host string, localPort int, remoteHost string, r
 		return nil, fmt.Errorf("start ssh forward: %w", err)
 	}
 
-	// Reap the subprocess when it exits so it does not become a zombie and
-	// so cmd.ProcessState is populated (required for D-06 liveness check).
-	go func() { _ = cmd.Wait() }()
+	entry := &ForwardEntry{
+		Cmd: cmd,
+	}
 
-	return cmd, nil
+	// Reap the subprocess when it exits so it does not become a zombie.
+	// entry.exited is set after Wait returns, providing a race-free signal
+	// for Status() and KillAll() (CR-01).
+	go func() {
+		_ = cmd.Wait()
+		entry.exited.Store(true)
+	}()
+
+	return entry, nil
 }
 
 // PollReady is the exported entry point for readiness polling.
@@ -175,17 +201,22 @@ func startForward(socket, user, host string, localPort int, remoteHost string, r
 func PollReady(localPort int) error { return pollReady(localPort) }
 
 // pollReady polls the local port until ssh binds it or the attempt budget expires.
-// Polls 10 times with 50ms sleep between attempts (500ms total budget) (D-13).
+// Polls 10 times with 50ms sleep before each retry (500ms total budget) (D-13).
+// The sleep is placed before the dial on iterations 1–9 (not after iteration 9)
+// so the worst-case latency is exactly 9×50ms = 450ms before the final attempt,
+// avoiding an unnecessary trailing sleep on the last failed iteration (WR-02).
 // Returns a non-nil error if the port never becomes reachable.
 func pollReady(localPort int) error {
 	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
 	for i := 0; i < 10; i++ {
+		if i > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
 		conn, err := net.Dial("tcp", addr)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("ssh forward on port %d did not become reachable within 500ms", localPort)
 }
