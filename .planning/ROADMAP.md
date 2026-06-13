@@ -1,74 +1,47 @@
-# Milestone v2.1: Tunneling & Access Controls
+# Roadmap: claude-ssh-daemon
 
-**Status:** In Progress
-**Phases:** 8–11
-**Current Phase:** 11
+## Milestones
 
-## Overview
-
-Access control layer and port-forwarding capability. Phases 8–10 added per-host config schema (`exec_allowlist`, `base_dir`), command-allowlist enforcement on `ssh_exec`, and a lexical base-directory path sandbox across all six file/exec/transfer tools. Phase 11 adds local port forwarding as a new MCP tool.
+- ✅ **v1.1 Prompt Injection Safeguards** — Phases 4–6 (shipped 2026-06-03)
+- ✅ **v2.1 Tunneling & Access Controls** — Phases 8–11 (shipped 2026-06-13)
 
 ## Phases
 
-### Phase 8: Config Schema
+<details>
+<summary>✅ v1.1 Prompt Injection Safeguards (Phases 4–6) — SHIPPED 2026-06-03</summary>
 
-**Goal**: Extend `HostConfig` with `exec_allowlist` (`*[]string`) and `base_dir` (`string`) fields, validated at startup
-**Depends on**: Phase 7
-**Plans**: 1 plan
-**Status**: ✅ Complete
+- [x] Phase 4: Injection Guard Engine (1/1 plans) — completed 2026-06-03
+- [x] Phase 5: Safeguards Config Block (1/1 plans) — completed 2026-06-03
+- [x] Phase 6: Guard Handler Wiring (3/3 plans) — completed 2026-06-03
 
-Plans:
+Archive: `.planning/milestones/v1.1-ROADMAP.md`
 
-- [x] 08-01-PLAN.md — ExecAllowlist + BaseDir fields, Validate() path checks, table-driven tests
+</details>
 
----
+<details>
+<summary>✅ v2.1 Tunneling & Access Controls (Phases 8–11) — SHIPPED 2026-06-13</summary>
 
-### Phase 9: Command Allowlist
+- [x] Phase 8: Config Schema (1/1 plans) — completed 2026-06-05
+- [x] Phase 9: Command Allowlist (1/1 plans) — completed 2026-06-08
+- [x] Phase 10: BaseDir Path Sandbox (3/3 plans) — completed 2026-06-10
+- [x] Phase 11: Port Forwarding (2/2 plans) — completed 2026-06-13
 
-**Goal**: Enforce `exec_allowlist` in `execHandler` — nil=allow-all, empty=deny-all, non-empty=prefix-match — with structured MCP error on reject
-**Depends on**: Phase 8
-**Plans**: 1 plan
-**Status**: ✅ Complete
+Archive: `.planning/milestones/v2.1-ROADMAP.md`
 
-Plans:
+</details>
 
-- [x] 09-01-PLAN.md — allowlist guard in execHandler, per-host test coverage
+### Next Milestone
 
----
+Start with `/gsd-new-milestone` to define requirements and roadmap for the next version.
 
-### Phase 10: BaseDir Path Sandbox
+## Progress
 
-**Goal**: Confine all six MCP file/exec/transfer tools to a per-host `base_dir` using a lexical containment predicate (`withinBaseDir`), with symlink-blind-spot documentation
-**Depends on**: Phase 9
-**Plans**: 3 plans
-**Status**: ✅ Complete
-
-Plans:
-
-- [x] 10-01-PLAN.md — withinBaseDir predicate + sandbox.go, readFile + listDir guards
-- [x] 10-02-PLAN.md — writeFile + upload + download guards, symlink docs
-- [x] 10-03-PLAN.md — execHandler cwd enforcement (D-01 empty cwd, D-02 out-of-sandbox cwd)
-
----
-
-### Phase 11: Port Forwarding
-
-**Goal**: Add `ssh_forward_port` and `ssh_list_forwards` MCP tools that create and enumerate local SSH port forwards via `ssh -L -S -N` subprocesses, with in-process liveness tracking and clean shutdown
-**Depends on**: Phase 10
-**Plans**: 2 plans
-**Status**: 🔲 Not started
-
-Plans:
-**Wave 1**
-
-- [x] 11-01-PLAN.md — internal/forward package: Forwarder registry, allocatePort/startForward/pollReady/KillAll helpers, unit tests
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 11-02-PLAN.md — ssh_forward_port + ssh_list_forwards handlers, RegisterTools wiring, daemon shutdown KillAll, handler tests
-
-Canonical refs:
-
-- `.planning/phases/11-port-forwarding/` (phase directory)
-
----
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 4. Injection Guard Engine | v1.1 | 1/1 | Complete | 2026-06-03 |
+| 5. Safeguards Config Block | v1.1 | 1/1 | Complete | 2026-06-03 |
+| 6. Guard Handler Wiring | v1.1 | 3/3 | Complete | 2026-06-03 |
+| 8. Config Schema | v2.1 | 1/1 | Complete | 2026-06-05 |
+| 9. Command Allowlist | v2.1 | 1/1 | Complete | 2026-06-08 |
+| 10. BaseDir Path Sandbox | v2.1 | 3/3 | Complete | 2026-06-10 |
+| 11. Port Forwarding | v2.1 | 2/2 | Complete | 2026-06-13 |

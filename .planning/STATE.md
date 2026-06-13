@@ -2,26 +2,26 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: Tunneling & Access Controls
-status: milestone_complete
-stopped_at: Milestone complete (Phase 11 was final phase)
-last_updated: 2026-06-10T16:44:07.290Z
-last_activity: 2026-06-10 -- Phase 11 execution started
+status: archived
+stopped_at: Milestone v2.1 archived 2026-06-13
+last_updated: 2026-06-13T00:00:00.000Z
+last_activity: 2026-06-13 -- v2.1 milestone archived
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 4
   total_plans: 7
-  completed_plans: 6
-  percent: 50
+  completed_plans: 7
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-10)
+See: .planning/PROJECT.md (updated 2026-06-13)
 
 **Core value:** Claude can execute remote commands through a persistent SSH tunnel via native MCP tools, without managing SSH connection lifecycle or credentials itself.
-**Current focus:** Milestone complete
+**Current focus:** Planning next milestone — run /gsd-new-milestone
 
 ## Current Position
 
@@ -73,8 +73,19 @@ None.
 - Platform divergence in Phase 11: `Pdeathsig` is Linux-only; macOS needs `Setpgid` + explicit signal. Verify exact `SysProcAttr` spelling at plan time.
 - Port-0 TOCTOU in Phase 11: `net.Listen(":0")` then close then `ssh -L` creates a race — accepted (SAFE-01 precedent), document in code.
 
+## Deferred Items
+
+Items acknowledged and deferred at milestone close on 2026-06-13:
+
+| Category | Item | Status |
+|----------|------|--------|
+| uat_gap | Phase 11: 11-HUMAN-UAT.md | verified (all 3 tests passed; SDK still reports as gap) |
+| verification_gap | Phase 11: 11-VERIFICATION.md | human_needed resolved by UAT completion (fcc576d, 1e68742) |
+
+Known deferred items at close: 2 (both resolved by UAT completion — SDK counts as open due to status field not being updated to "passed")
+
 ## Session Continuity
 
-Last session: 2026-06-10T15:55:37.136Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-port-forwarding/11-CONTEXT.md
+Last session: 2026-06-13T00:00:00Z
+Stopped at: Milestone v2.1 complete
+Resume file: n/a — start /gsd-new-milestone for v2.2
