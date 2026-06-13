@@ -62,6 +62,8 @@ func TestForwardPortDuplicate(t *testing.T) {
 	// Pre-seed the Forwarder so the key forward.Key(hostName, fixedPort) already exists.
 	fwd := forward.NewForwarder()
 	fwd.Store(forward.Key(hostName, fixedPort), &forward.ForwardEntry{
+		Socket:    "/tmp/ssh-web.sock",
+		User:      "ubuntu",
 		LocalPort: fixedPort,
 		HostName:  hostName,
 	})

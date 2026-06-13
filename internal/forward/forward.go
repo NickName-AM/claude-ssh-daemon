@@ -1,7 +1,18 @@
-// Package forward manages the lifecycle of ssh -L port-forward subprocesses.
-// It provides a mutex-protected registry of active forwards (Forwarder), the
-// ForwardEntry type that tracks per-forward state, and stdlib helpers for port
-// allocation, subprocess launch, and readiness polling.
+// Package forward manages the lifecycle of ssh -L port-forward requests via the
+// ControlMaster mux protocol (ssh -O forward / ssh -O cancel).
+//
+// Design change from subprocess-tracking model:
+// The original implementation tracked an ssh -L subprocess per forward. This was
+// wrong: when ssh is invoked with -S <socket>, it contacts the ControlMaster via
+// the mux protocol, negotiates the port binding, then exits immediately with
+// status 0. The ControlMaster process owns the listening port. Tracking the
+// already-dead child meant KillAll() had nothing to kill and forwards survived
+// daemon shutdown (root cause of T-11-UAT-3 failure).
+//
+// The correct model:
+//   - Creation: ssh -O forward -S <socket> -L spec user@host (exits after mux req)
+//   - Teardown: ssh -O cancel -S <socket> -L spec user@host (mux req to release port)
+//   - Registry stores the parameters needed to reconstruct the cancel command.
 package forward
 
 import (
@@ -9,19 +20,20 @@ import (
 	"net"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// ForwardEntry holds the state for a single active ssh -L port forward (D-05).
+// ForwardEntry holds the parameters for a single active ssh -L port forward.
+// No subprocess handle is kept — the ControlMaster owns the port; teardown
+// uses ssh -O cancel with the same parameters used for creation.
 type ForwardEntry struct {
-	Cmd        *exec.Cmd
-	LocalPort  int
-	RemoteHost string
-	RemotePort int
-	HostName   string
-	StartedAt  time.Time
-	exited     atomic.Bool // set to true by the reaper goroutine after cmd.Wait() returns
+	Socket     string    // ControlMaster socket path (-S arg)
+	User       string    // SSH user (user@host)
+	LocalPort  int       // allocated local port
+	RemoteHost string    // remote forwarding target host
+	RemotePort int       // remote forwarding target port
+	HostName   string    // config host name (registry key prefix)
+	StartedAt  time.Time // when the forward was established
 }
 
 // Forwarder is a mutex-protected registry of active ForwardEntry instances.
@@ -62,8 +74,8 @@ func (f *Forwarder) Store(key string, entry *ForwardEntry) {
 }
 
 // Delete removes the entry for key from the registry.
-// Callers can use this to evict dead entries (status "dead") to prevent
-// unbounded accumulation in long-running daemon processes (WR-03).
+// Callers can use this to evict cancelled entries to prevent unbounded
+// accumulation in long-running daemon processes (WR-03).
 func (f *Forwarder) Delete(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -71,7 +83,7 @@ func (f *Forwarder) Delete(key string) {
 }
 
 // Snapshot returns a copied slice of all current entries for safe iteration.
-// The returned slice is always non-nil — an empty registry yields []ForwardEntry{},
+// The returned slice is always non-nil — an empty registry yields []*ForwardEntry{},
 // which marshals to JSON [] rather than null (Pitfall 7).
 func (f *Forwarder) Snapshot() []*ForwardEntry {
 	f.mu.Lock()
@@ -83,35 +95,19 @@ func (f *Forwarder) Snapshot() []*ForwardEntry {
 	return out
 }
 
-// KillAll sends SIGKILL to every live forward process.
+// CancelAll sends ssh -O cancel for every registered forward.
 // Called by daemon.Run in the shutdown path (D-07).
-// Kill() is a non-blocking signal send — it does not wait for exit.
-// Do NOT call cmd.Wait() here; each forward has its own background Wait goroutine
-// (started in startForward) that reaps the process and sets entry.exited.
-func (f *Forwarder) KillAll() {
+// Errors are silently ignored — if the ControlMaster is already gone the
+// forward is already dead; there is nothing useful to do.
+//
+// CancelAll replaces the old KillAll() which sent SIGKILL to subprocess
+// handles that were already dead (T-11-UAT-3 root cause).
+func (f *Forwarder) CancelAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, entry := range f.entries {
-		if entry.Cmd.Process != nil && !entry.exited.Load() {
-			_ = entry.Cmd.Process.Kill()
-		}
+		_ = cancelForward(entry.Socket, entry.User, entry.HostName, entry.LocalPort, entry.RemoteHost, entry.RemotePort)
 	}
-}
-
-// HasExited reports whether the ssh subprocess has already exited.
-// The reaper goroutine sets this atomically after cmd.Wait() returns.
-// Use HasExited instead of reading cmd.ProcessState directly to avoid data races.
-func HasExited(entry *ForwardEntry) bool {
-	return entry.exited.Load()
-}
-
-// Status returns "dead" if the process has exited (the reaper goroutine has
-// set entry.exited after cmd.Wait() returns), or "running" otherwise (D-06, D-10).
-func Status(entry *ForwardEntry) string {
-	if entry.exited.Load() {
-		return "dead"
-	}
-	return "running"
 }
 
 // AllocatePort is the exported entry point for port allocation.
@@ -127,8 +123,8 @@ func AllocatePort() (int, error) { return allocatePort() }
 //
 // TOCTOU: the port is released before ssh claims it. A concurrent process could
 // claim the port in this window. Race is accepted per SAFE-01 precedent (D-08).
-// If another process claims the port, ssh -L will fail and pollReady will surface
-// the error within the 500ms budget.
+// If another process claims the port, ssh -O forward will fail and pollReady will
+// surface the error within the 500ms budget.
 func allocatePort() (int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -140,60 +136,70 @@ func allocatePort() (int, error) {
 	return port, nil
 }
 
-// StartForward is the exported entry point for launching an ssh -L subprocess.
-// See startForward for full documentation.
-func StartForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
-	return startForward(socket, user, host, localPort, remoteHost, remotePort)
+// CreateForward is the exported entry point for establishing an ssh -L forward.
+// See createForward for full documentation.
+func CreateForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
+	return createForward(socket, user, host, localPort, remoteHost, remotePort)
 }
 
-// startForward launches ssh -L as a long-lived background process via os/exec.
-// The subprocess uses -S (ControlMaster socket), -N (no remote command), and
-// BatchMode=yes to prevent interactive prompts (D-11).
+// createForward establishes a port forward via the ControlMaster mux protocol.
 //
-// Orphan prevention (D-12) is handled by setSysProcAttr, which is implemented
-// in platform-specific files:
-//   - forward_linux.go:   Pdeathsig: syscall.SIGTERM (kernel parent-death signal)
-//   - forward_other.go:   Setpgid: true (child in own process group; KillAll signals it)
+// It runs: ssh -O forward -S <socket> -L localPort:remoteHost:remotePort user@host
 //
-// Pdeathsig is a Linux/FreeBSD-only syscall field; referencing it on macOS causes
-// a compile error (Pitfall 1). Build-constrained files are the only correct approach
-// (the runtime.GOOS check is not sufficient because the compiler evaluates struct
-// literals at compile time regardless of the enclosing branch).
+// The ssh process exits immediately after the mux negotiation succeeds (with
+// exit status 0). The ControlMaster process takes ownership of the listening
+// port. createForward waits for the ssh process to exit and returns a
+// ForwardEntry with the parameters needed to cancel the forward later.
 //
-// After a successful Start, a background goroutine calls cmd.Wait() so the
-// process is reaped when it exits. entry.exited is set atomically to avoid
-// data races on ProcessState (CR-01, Pitfall 4).
-func startForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
+// On failure (non-zero exit), the ControlMaster rejected the forward request.
+// No port will be listening, so no cleanup is needed.
+func createForward(socket, user, host string, localPort int, remoteHost string, remotePort int) (*ForwardEntry, error) {
 	lSpec := fmt.Sprintf("%d:%s:%d", localPort, remoteHost, remotePort)
 	cmd := exec.Command("ssh",
-		"-L", lSpec,
+		"-O", "forward",
 		"-S", socket,
-		"-N",
-		"-o", "BatchMode=yes",
+		"-L", lSpec,
 		user+"@"+host,
 	)
 
-	// Platform-specific orphan prevention (D-12).
-	// Implemented in forward_linux.go (Pdeathsig) and forward_other.go (Setpgid).
-	setSysProcAttr(cmd)
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start ssh forward: %w", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ssh -O forward: %w (output: %s)", err, string(out))
 	}
 
-	entry := &ForwardEntry{
-		Cmd: cmd,
+	return &ForwardEntry{
+		Socket:     socket,
+		User:       user,
+		RemoteHost: remoteHost,
+		RemotePort: remotePort,
+		// HostName and LocalPort are set by the caller after Store (tools/forward.go).
+	}, nil
+}
+
+// CancelForward is the exported entry point for cancelling a single forward.
+// See cancelForward for full documentation.
+func CancelForward(socket, user, host string, localPort int, remoteHost string, remotePort int) error {
+	return cancelForward(socket, user, host, localPort, remoteHost, remotePort)
+}
+
+// cancelForward releases a port forward via the ControlMaster mux protocol.
+//
+// It runs: ssh -O cancel -S <socket> -L localPort:remoteHost:remotePort user@host
+//
+// The ssh process exits immediately after the mux negotiation (with exit
+// status 0 on success). The ControlMaster releases the listening port.
+func cancelForward(socket, user, host string, localPort int, remoteHost string, remotePort int) error {
+	lSpec := fmt.Sprintf("%d:%s:%d", localPort, remoteHost, remotePort)
+	cmd := exec.Command("ssh",
+		"-O", "cancel",
+		"-S", socket,
+		"-L", lSpec,
+		user+"@"+host,
+	)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ssh -O cancel: %w (output: %s)", err, string(out))
 	}
-
-	// Reap the subprocess when it exits so it does not become a zombie.
-	// entry.exited is set after Wait returns, providing a race-free signal
-	// for Status() and KillAll() (CR-01).
-	go func() {
-		_ = cmd.Wait()
-		entry.exited.Store(true)
-	}()
-
-	return entry, nil
+	return nil
 }
 
 // PollReady is the exported entry point for readiness polling.

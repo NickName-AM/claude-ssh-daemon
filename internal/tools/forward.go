@@ -33,7 +33,7 @@ type ForwardPortOutput struct {
 	Status     string `json:"status"`
 }
 
-// ForwardListEntry describes a single active (or dead) port forward (D-10).
+// ForwardListEntry describes a single active port forward (D-10).
 type ForwardListEntry struct {
 	LocalPort  int    `json:"local_port"`
 	RemoteHost string `json:"remote_host"`
@@ -53,7 +53,7 @@ type ListForwardsOutput struct {
 //  2. Read h.Socket, h.User, h.Host from cfg.Hosts[hostName].
 //  3. allocatePortFn() — allocate a free local port (test seam).
 //  4. Duplicate check (D-02) — if key already in registry, return IsError true.
-//  5. StartForward — launch ssh -L subprocess.
+//  5. CreateForward — send ssh -O forward to the ControlMaster mux.
 //  6. PollReady — wait up to 500ms for the port to become reachable (Pitfall 3).
 //  7. On success — Store entry and return D-09 response shape with status "running".
 func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config, fwd *forward.Forwarder) mcp.ToolHandlerFor[ForwardPortInput, ForwardPortOutput] {
@@ -110,35 +110,27 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 			}, ForwardPortOutput{}, nil
 		}
 
-		// Step 5: launch the ssh -L subprocess.
-		entry, err := forward.StartForward(h.Socket, h.User, h.Host, localPort, in.RemoteHost, in.RemotePort)
+		// Step 5: request the port forward from the ControlMaster via ssh -O forward.
+		// The ssh process exits immediately after mux negotiation — the ControlMaster
+		// takes ownership of the listening port.
+		entry, err := forward.CreateForward(h.Socket, h.User, h.Host, localPort, in.RemoteHost, in.RemotePort)
 		if err != nil {
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{
-					Text: fmt.Sprintf("[host %s] failed to start ssh forward: %s", hostName, err.Error()),
+					Text: fmt.Sprintf("[host %s] failed to create ssh forward: %s", hostName, err.Error()),
 				}},
 			}, ForwardPortOutput{}, nil
 		}
 
 		// Step 6: poll until the local port becomes reachable (500ms budget).
 		// Do NOT Store on failure — a stale entry would block future forwards (Pitfall 3, T-11-07).
+		// On failure the ControlMaster rejected or failed the request; no cancel is needed.
 		if err := forward.PollReady(localPort); err != nil {
-			// Check whether ssh already exited on its own before we kill it (WR-01).
-			// The check must happen before Kill() because Kill() is non-blocking —
-			// the reaper goroutine may not have set exited by the time we check after.
-			alreadyExited := forward.HasExited(entry)
-			if entry.Cmd.Process != nil {
-				_ = entry.Cmd.Process.Kill()
-			}
-			hint := ""
-			if alreadyExited {
-				hint = fmt.Sprintf(" (ssh process exited immediately — ControlMaster socket %s may be dead)", h.Socket)
-			}
 			return &mcp.CallToolResult{
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{
-					Text: fmt.Sprintf("[host %s] %s%s", hostName, err.Error(), hint),
+					Text: fmt.Sprintf("[host %s] %s (ControlMaster socket: %s)", hostName, err.Error(), h.Socket),
 				}},
 			}, ForwardPortOutput{}, nil
 		}
@@ -146,8 +138,6 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 		// Step 7: store the entry only after successful readiness check (Pitfall 3, T-11-07).
 		// Populate the remaining fields now that we know the forward is live.
 		entry.LocalPort = localPort
-		entry.RemoteHost = in.RemoteHost
-		entry.RemotePort = in.RemotePort
 		entry.HostName = hostName
 		entry.StartedAt = time.Now()
 		fwd.Store(key, entry)
@@ -165,7 +155,8 @@ func forwardPortHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config,
 }
 
 // listForwardsHandler returns a ToolHandlerFor closure for the ssh_list_forwards tool (D-10).
-// Takes a snapshot of the Forwarder and maps entries to ForwardListEntry with running/dead status.
+// Takes a snapshot of the Forwarder and maps entries to ForwardListEntry.
+// Entries in the registry are always "running" — dead forwards are removed on cancel.
 // The Forwards slice is always non-nil so it JSON-marshals to [] not null (Pitfall 7, T-11-09).
 func listForwardsHandler(fwd *forward.Forwarder) mcp.ToolHandlerFor[struct{}, ListForwardsOutput] {
 	return func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListForwardsOutput, error) {
@@ -179,7 +170,7 @@ func listForwardsHandler(fwd *forward.Forwarder) mcp.ToolHandlerFor[struct{}, Li
 				RemoteHost: e.RemoteHost,
 				RemotePort: e.RemotePort,
 				Host:       e.HostName,
-				Status:     forward.Status(e),
+				Status:     "running",
 			})
 		}
 		return nil, ListForwardsOutput{Forwards: out}, nil

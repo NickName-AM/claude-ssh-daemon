@@ -146,10 +146,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
-	// Kill all active port forwards before closing the listener (D-07, T-11-08).
-	// KillAll must precede ln.Close() so that live forwards are signaled while
-	// the daemon is still running (Pitfall 6 ordering).
-	fwd.KillAll()
+	// Cancel all active port forwards before closing the listener (D-07, T-11-08).
+	// CancelAll sends ssh -O cancel for each registered forward so the ControlMaster
+	// releases the listening port. Must precede ln.Close() so the daemon is still
+	// running when the cancel commands are issued (Pitfall 6 ordering).
+	fwd.CancelAll()
 
 	// Close the listener to unblock any pending Accept() call.
 	ln.Close()

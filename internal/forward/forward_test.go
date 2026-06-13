@@ -1,7 +1,6 @@
 package forward
 
 import (
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -39,7 +38,8 @@ func TestStoreAndHas(t *testing.T) {
 	key := Key("h", 5000)
 	require.False(t, f.Has(key), "key must not exist before Store")
 	entry := &ForwardEntry{
-		Cmd:       exec.Command("true"),
+		Socket:    "/tmp/ssh-h.sock",
+		User:      "ubuntu",
 		HostName:  "h",
 		LocalPort: 5000,
 	}
@@ -49,30 +49,34 @@ func TestStoreAndHas(t *testing.T) {
 	require.Len(t, snap, 1, "Snapshot must have exactly 1 entry after Store")
 }
 
-// TestKillAllNilSafe verifies that KillAll does not panic when Process is nil
-// (subprocess was never started).
-func TestKillAllNilSafe(t *testing.T) {
+// TestCancelAllNoSocket verifies that CancelAll does not panic when the
+// ControlMaster socket does not exist. The error from ssh -O cancel is
+// silently ignored — if the ControlMaster is gone the forward is already dead.
+func TestCancelAllNoSocket(t *testing.T) {
 	f := NewForwarder()
-	key := Key("nilhost", 9999)
+	key := Key("nohost", 9999)
 	entry := &ForwardEntry{
-		Cmd:       exec.Command("true"), // Process is nil — never Started
-		HostName:  "nilhost",
-		LocalPort: 9999,
+		Socket:     "/tmp/no-such-ctrl.sock",
+		User:       "ubuntu",
+		HostName:   "nohost",
+		LocalPort:  9999,
+		RemoteHost: "db.internal",
+		RemotePort: 5432,
 	}
 	f.Store(key, entry)
-	// Must not panic even though entry.Cmd.Process is nil.
-	f.KillAll()
+	// Must not panic even though the socket does not exist.
+	f.CancelAll()
 }
 
-// TestStatusRunningVsDead verifies Status() correctly distinguishes exited vs
-// not-yet-exited processes using the atomic exited flag (D-06, CR-01).
-func TestStatusRunningVsDead(t *testing.T) {
-	// Dead: entry with exited flag set (mirrors what the reaper goroutine does).
-	dead := &ForwardEntry{Cmd: exec.Command("true")}
-	dead.exited.Store(true)
-	require.Equal(t, "dead", Status(dead), "exited process must have status 'dead'")
-
-	// Running: freshly created entry — exited flag is false.
-	running := &ForwardEntry{Cmd: exec.Command("true")}
-	require.Equal(t, "running", Status(running), "unstarted process must have status 'running'")
+// TestDeleteRemovesEntry verifies that Delete evicts the entry from the registry.
+func TestDeleteRemovesEntry(t *testing.T) {
+	f := NewForwarder()
+	key := Key("h", 6000)
+	entry := &ForwardEntry{HostName: "h", LocalPort: 6000}
+	f.Store(key, entry)
+	require.True(t, f.Has(key))
+	f.Delete(key)
+	require.False(t, f.Has(key), "entry must be gone after Delete")
+	snap := f.Snapshot()
+	require.Len(t, snap, 0, "Snapshot must be empty after Delete")
 }
