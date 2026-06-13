@@ -86,17 +86,19 @@ You should see `claude-ssh-daemon` listed as connected with its tools.
 
 ## What it can do
 
-**SSH tools (v1 -- all 7 shipped)**
+**SSH tools (v2.1 -- all 9 shipped)**
 
-| Tool | Type | Description |
-|------|------|-------------|
-| `ssh_connection_status` | read-only | Check whether the SSH ControlMaster socket is alive and get a re-establishment hint if it is not |
-| `ssh_exec` | destructive | Execute a remote shell command via the SSH ControlMaster session |
-| `ssh_read_file` | read-only | Read the contents of a remote file |
-| `ssh_list_dir` | read-only | List the contents of a remote directory |
-| `ssh_write_file` | destructive | Write or overwrite a remote file |
-| `ssh_upload_file` | destructive | Upload a local file to the remote host |
-| `ssh_download_file` | destructive | Download a remote file to the local machine |
+| Tool | Capability | Type | Description |
+|------|-----------|------|-------------|
+| `ssh_connection_status` | always on | read-only | Check whether the SSH ControlMaster socket is alive and get a re-establishment hint if it is not |
+| `ssh_exec` | `exec` | destructive | Execute a remote shell command via the SSH ControlMaster session |
+| `ssh_read_file` | `file_read` | read-only | Read the contents of a remote file |
+| `ssh_list_dir` | `file_read` | read-only | List the contents of a remote directory |
+| `ssh_write_file` | `file_write` | destructive | Write or overwrite a remote file |
+| `ssh_upload_file` | `file_write` | destructive | Upload a local file to the remote host |
+| `ssh_download_file` | `file_write` | destructive | Download a remote file to the local machine |
+| `ssh_forward_port` | `port_forward` | destructive | Create a local SSH port forward via the ControlMaster session (auto-allocates a free local port) |
+| `ssh_list_forwards` | `port_forward` | read-only | List all active port forwards managed by this daemon instance, with running/dead status |
 
 **Core daemon**
 - Starts up and creates a Unix socket at the path you configure
@@ -113,12 +115,6 @@ You should see `claude-ssh-daemon` listed as connected with its tools.
 - Safeguards layer: prompt-injection scanning on all tool output (on by default), overwrite protection for `ssh_write_file` (opt-in), destructive command blocking for `ssh_exec` (opt-in)
 - Per-host `base_dir`: lexically confines all file and exec-cwd operations to a directory subtree (opt-in per host)
 - Per-host `exec_allowlist`: restricts `ssh_exec` to a set of command prefixes (opt-in per host)
-
-## Roadmap (v2)
-
-Port forwarding (`ssh_port_forward`, `ssh_kill_forward`, `ssh_list_forwards`) is the next planned capability. It is not included in v1. See REQUIREMENTS.md for the full specification.
-
----
 
 ## Requirements
 
@@ -259,6 +255,48 @@ Note: Claude Code has no native Unix-socket transport type -- the `stdio` + `soc
 
 The MCP socket is created mode 0600 (owner-only), so the `socat` bridge is only reachable by the user who owns the daemon process.
 
+## Example Claude Code prompts
+
+Once the daemon is running and registered, you can talk to your remote hosts naturally. Here are some prompts that work well:
+
+**Explore and understand a remote service**
+```
+Check the status of nginx on my prod server — is it running, what config is it using, and are there any recent errors in the logs?
+```
+
+**Tail logs and diagnose issues**
+```
+Read the last 100 lines of /var/log/app/error.log on prod and summarize any recurring errors or patterns you see.
+```
+
+**Deploy a change**
+```
+Upload my local ./dist/app.js to /srv/app/dist/app.js on the staging host, then restart the Node process with: systemctl --user restart myapp
+```
+
+**Database access via port forwarding**
+```
+Forward the Postgres port from db.internal:5432 so I can connect to it locally. Tell me the local port when it's ready.
+```
+After the forward is established, you can then connect with `psql -h 127.0.0.1 -p <local_port> -U myuser mydb`.
+
+**Inspect and edit a config file**
+```
+Read /etc/nginx/sites-available/mysite on prod. The upstream timeout is too low — update it to 60s and reload nginx.
+```
+
+**Multi-host workflow**
+```
+Compare the app version currently deployed on staging vs prod — read /srv/app/package.json on each host and tell me if they differ.
+```
+
+**Check connection health before starting work**
+```
+Check the SSH connection status for all my configured hosts before we start.
+```
+
+---
+
 ## Project status
 
-v1 is complete and usable. All 7 SSH tools work end-to-end over the ControlMaster socket. Port forwarding is the v2 roadmap item.
+v2.1 is complete. All 9 SSH tools work end-to-end: 7 core tools (connection check, exec, file read/write/list/upload/download) plus 2 port-forwarding tools (`ssh_forward_port`, `ssh_list_forwards`). Multi-host config, `base_dir` sandboxing, `exec_allowlist`, and safeguards (prompt-injection scanning, overwrite protection, delete blocking) are all shipped.
