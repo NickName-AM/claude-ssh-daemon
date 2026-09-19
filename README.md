@@ -113,12 +113,14 @@ You should see `claude-ssh-daemon` listed as connected with its tools.
 - Umask-before-listen pattern to close the race window between `listen()` and `chmod()` (mitigates CVE-2023-45145 class)
 - Capability toggles in config (`exec`, `file_read`, `file_write`, `port_forward`) all default to off; disabled tools are never registered
 - Safeguards layer: prompt-injection scanning on all tool output (on by default), overwrite protection for `ssh_write_file` (opt-in), destructive command blocking for `ssh_exec` (opt-in)
-- Per-host `base_dir`: lexically confines all file and exec-cwd operations to a directory subtree (opt-in per host)
-- Per-host `exec_allowlist`: restricts `ssh_exec` to a set of command prefixes (opt-in per host)
+- Destructive command blocking is a guardrail against accidents, not a security boundary: it only inspects the first token of the command, so `sh -c 'rm -rf /'`, `true && rm -rf /`, `find . -delete`, and truncating shell redirection all pass through it. Do not rely on it to contain an untrusted caller.
+- Per-host `base_dir`: lexically confines remote file paths and the `ssh_exec` cwd to a directory subtree (opt-in per host)
+- Top-level `local_base_dir`: lexically confines the local path of `ssh_upload_file` and `ssh_download_file` to a directory subtree (opt-in, applies to all hosts)
+- Per-host `exec_allowlist`: restricts `ssh_exec` to a set of command prefixes and rejects shell control characters (opt-in per host)
 
 ## Requirements
 
-- Go 1.23+
+- Go 1.25+
 - macOS or Linux
 - An SSH ControlMaster session already running (you manage this); OpenSSH 6.0+ recommended (`-O check` requires OpenSSH 5.6+, 6.0+ is a safe documented floor)
 - `socat` for the Claude Code stdio bridge: `brew install socat` (macOS) or `apt install socat` (Debian/Ubuntu). Use the **full absolute path** to `socat` in your MCP config — Claude Code spawns servers with a restricted PATH and may not find socat by name alone (see Step 5 above).
@@ -156,6 +158,7 @@ Create `~/.config/claude-ssh-daemon/config.json`.
 {
   "mcp_socket": "/tmp/claude-ssh-daemon.sock",
   "default_host": "prod",
+  "local_base_dir": "/Users/me/work",
   "hosts": {
     "prod": {
       "socket": "/tmp/ssh-ctrl-ubuntu@prod.sock",
@@ -181,12 +184,18 @@ Create `~/.config/claude-ssh-daemon/config.json`.
 
 With multi-host config every tool accepts an optional `host` parameter. Omit it to target `default_host`. Each host needs its own ControlMaster session running against its `socket` path.
 
+**Top-level optional fields:**
+
+| Field | Default | Effect |
+|-------|---------|--------|
+| `local_base_dir` | `""` (unset) | Absolute path, host-independent, opt-in. When empty or absent local paths are unconfined (previous behaviour). When set it confines the *local* path of `ssh_upload_file` (the source) and `ssh_download_file` (the destination) to this directory tree. Must be an absolute path or the daemon fails to start with `config: local_base_dir must be an absolute path, got "..."`; the value is cleaned to a canonical form at load time. Confinement is lexical — local symlinks are not resolved and may point outside, the same limitation as the per-host `base_dir`. Paths outside it are rejected with `isError: true` and `local path "..." is outside local_base_dir "..."`. |
+
 **Per-host optional fields:**
 
 | Field | Default | Effect |
 |-------|---------|--------|
-| `base_dir` | `""` (unset) | Absolute path. When set, all file operations (`ssh_read_file`, `ssh_write_file`, `ssh_list_dir`, `ssh_upload_file`, `ssh_download_file`) and `ssh_exec` cwd are confined to this directory tree by lexical path checking. Paths that resolve outside are rejected with `isError: true`. Symlinks on the remote are not resolved and may point outside `base_dir`. |
-| `exec_allowlist` | `null` (allow-all) | JSON array of command prefixes. When `null` or absent: all commands are allowed. When set to `[]` (empty array): all commands are denied. When set to `["git ", "make "]`: only commands whose first token matches a listed prefix are allowed. |
+| `base_dir` | `""` (unset) | Absolute path. When set, remote paths are confined to this directory tree by lexical path checking: `ssh_read_file`, `ssh_write_file`, `ssh_list_dir`, the *remote* path of `ssh_upload_file` and `ssh_download_file`, and the `ssh_exec` cwd. It never constrains the local path of the transfer tools — use the top-level `local_base_dir` for that. Paths that resolve outside are rejected with `isError: true`. Symlinks on the remote are not resolved and may point outside `base_dir`. |
+| `exec_allowlist` | `null` (allow-all) | JSON array of command prefixes. When `null` or absent: all commands are allowed. When set to `[]` (empty array): all commands are denied. When set to `["git ", "make "]`: two rules apply. (1) The command string must start with one of the listed prefixes — a raw string prefix match, not token-aware. (2) The command must contain none of these shell control characters: `;` `&` `|` `$` `` ` `` `(` `)` `<` `>` newline, carriage return. Commands that fail either rule are rejected with `isError: true`. Characters common in ordinary arguments (globs, braces, quotes, paths, flags) are still allowed. Practical consequence: with an allowlist configured you cannot use pipes, redirection, command substitution, or command chaining — and a commit message containing parentheses (`git commit -m "fix (typo)"`) is rejected. |
 
 **Safeguards (optional):**
 
@@ -205,7 +214,7 @@ With multi-host config every tool accepts an optional `host` parameter. Omit it 
 |-------|---------|--------|
 | `guard_disabled` | `false` | When false, stdout/stderr from every tool is scanned for prompt-injection patterns. A warning is appended to the result but the operation is not blocked. |
 | `allow_overwrite` | `false` | When false, `ssh_write_file` refuses to write to paths that already exist on the remote. |
-| `allow_delete` | `false` | When false, `ssh_exec` blocks commands whose first token is `rm`, `unlink`, `truncate`, `shred`, or `dd`. |
+| `allow_delete` | `false` | When false, `ssh_exec` blocks commands whose first token has the basename `rm`, `unlink`, `truncate`, `shred`, or `dd`. Only that first token is checked, so `sh -c 'rm -rf /'`, `true && rm -rf /`, `find . -delete`, and truncating redirection are not caught — treat this as an accident guardrail, not a security boundary. |
 | `patterns` | `[]` | Additional regex strings appended to the built-in injection-detection ruleset. |
 
 Capability toggles: only tools for enabled capabilities are registered. Disabled tools are invisible to Claude — they do not appear in `tools/list`.

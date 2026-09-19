@@ -58,6 +58,22 @@ func uploadHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.
 			}, UploadOutput{}, nil
 		}
 
+		// local_base_dir sandbox guard on the local source path. Opt-in;
+		// empty means unconfined. Fires before any SSH I/O and before SAFE-01,
+		// mirroring the remote base_dir guard ordering (D-07). No [host %s] prefix:
+		// this is a local-side policy, not a host error.
+		if localBase := cfg.LocalBaseDir; localBase != "" {
+			if !withinLocalBaseDir(localBase, in.LocalPath) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"local path %q is outside local_base_dir %q",
+						in.LocalPath, localBase,
+					)}},
+				}, UploadOutput{}, nil
+			}
+		}
+
 		// BDIR-01/T-10-07: base_dir sandbox guard on the remote destination path.
 		// Guard fires before SAFE-01 (allow_overwrite) to fail fast without any
 		// remote SSH I/O (D-07). withinBaseDir is purely lexical (BDIR-03).
@@ -123,6 +139,23 @@ func downloadHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mc
 				IsError: true,
 				Content: []mcp.Content{&mcp.TextContent{Text: "local path must be absolute"}},
 			}, DownloadOutput{}, nil
+		}
+
+		// local_base_dir sandbox guard on the local destination path.
+		// Opt-in; empty means unconfined. Fires before any SSH I/O and before the
+		// SAFE-01 allow_overwrite stat — that stat cannot protect a file that does
+		// not exist yet, so this guard is what confines new-file writes. No
+		// [host %s] prefix: this is a local-side policy, not a host error.
+		if localBase := cfg.LocalBaseDir; localBase != "" {
+			if !withinLocalBaseDir(localBase, in.LocalPath) {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+						"local path %q is outside local_base_dir %q",
+						in.LocalPath, localBase,
+					)}},
+				}, DownloadOutput{}, nil
+			}
 		}
 
 		// BDIR-01/T-10-07: base_dir sandbox guard on the remote source path.

@@ -56,12 +56,12 @@ func RegisterTools(server *mcp.Server, registry map[string]ssh.SSHExecutor, cfg 
 		}, writeFileHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_upload_file",
-			Description: "Upload a local file to the remote host. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
+			Description: "Upload a local file to the remote host. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir; when local_base_dir is configured, the local path is likewise confined to that directory.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, uploadHandler(registry, cfg))
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "ssh_download_file",
-			Description: "Download a remote file to the local machine. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir.",
+			Description: "Download a remote file to the local machine. When base_dir is configured for the host, paths are confined to that directory by lexical checking only; symlinks on the remote are not resolved and may point outside base_dir; when local_base_dir is configured, the local destination path is likewise confined to that directory.",
 			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true)},
 		}, downloadHandler(registry, cfg))
 	}

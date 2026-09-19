@@ -753,3 +753,205 @@ func TestDownloadBaseDirEmptyUnchanged(t *testing.T) {
 	require.False(t, result.IsError, "download with empty base_dir must not set isError (no guard)")
 	require.True(t, mock.downloadCalled, "DownloadFile must be called when base_dir is empty")
 }
+
+// newLocalBaseDirTransferServer builds a test server with a single "default" host
+// (no remote base_dir) and the given top-level local_base_dir, so tests exercise
+// the local-side guard in isolation. AllowOverwrite:true keeps tests focused on
+// the local_base_dir guard rather than the SAFE-01 gate.
+func newLocalBaseDirTransferServer(t *testing.T, exec ssh.SSHExecutor, localBaseDir string) *mcp.ClientSession {
+	t.Helper()
+	cfg := &config.Config{
+		MCPSocket:    "/tmp/mcp.sock",
+		DefaultHost:  "default",
+		LocalBaseDir: localBaseDir,
+		Hosts: map[string]config.HostConfig{
+			"default": {Socket: "/tmp/test.sock", User: "user", Host: "host"},
+		},
+		Capabilities: config.Capabilities{FileWrite: true, FileRead: true},
+		Safeguards:   config.Safeguards{AllowOverwrite: true},
+	}
+	registry := map[string]ssh.SSHExecutor{"default": exec}
+	return newTestServer(t, registry, cfg)
+}
+
+// TestUploadLocalBaseDirInsidePathAllowed verifies that ssh_upload_file proceeds
+// when local_path is inside local_base_dir.
+func TestUploadLocalBaseDirInsidePathAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/srv/out/payload.txt",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload inside local_base_dir must not set isError")
+	require.True(t, mock.uploadCalled, "UploadFile must be called for in-sandbox local path")
+}
+
+// TestUploadLocalBaseDirOutsidePathRejected verifies that ssh_upload_file returns
+// IsError:true when local_path is outside local_base_dir, and that no SSH I/O
+// happens (guard fires before the executor).
+func TestUploadLocalBaseDirOutsidePathRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/.ssh/id_ed25519",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "upload outside local_base_dir must set isError")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called when local path is outside local_base_dir")
+	require.False(t, mock.runCalled, "RunCommand must NOT be called before the local_base_dir guard")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "outside local_base_dir", "error must state the path is outside local_base_dir")
+	require.Contains(t, text.Text, "/srv/out", "error must name the local_base_dir")
+	require.NotContains(t, text.Text, "[host ", "local-side policy error must not carry a host prefix")
+}
+
+// TestUploadLocalBaseDirSiblingPrefixRejected verifies the trailing-separator
+// boundary: /srv/out must not contain /srv/out_extra.
+func TestUploadLocalBaseDirSiblingPrefixRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/srv/out_extra/payload.txt",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "sibling directory sharing a prefix must be rejected")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called for a sibling-prefix path")
+}
+
+// TestUploadLocalBaseDirTraversalRejected verifies that a local_path using ../ to
+// escape local_base_dir is rejected (traversal attack).
+func TestUploadLocalBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/srv/out/../../etc/passwd",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "upload with traversal escaping local_base_dir must set isError")
+	require.False(t, mock.uploadCalled, "UploadFile must NOT be called for a traversal local path")
+}
+
+// TestUploadLocalBaseDirEmptyUnchanged verifies that upload behaviour is unchanged
+// when local_base_dir is empty (opt-in: no guard applied).
+func TestUploadLocalBaseDirEmptyUnchanged(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_upload_file",
+		Arguments: map[string]any{
+			"local_path":  "/home/user/.ssh/id_ed25519",
+			"remote_path": "/remote/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "upload with empty local_base_dir must not set isError (no guard)")
+	require.True(t, mock.uploadCalled, "UploadFile must be called when local_base_dir is empty")
+}
+
+// TestDownloadLocalBaseDirInsidePathAllowed verifies that ssh_download_file
+// proceeds when local_path is inside local_base_dir.
+func TestDownloadLocalBaseDirInsidePathAllowed(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	dir := t.TempDir()
+	cs := newLocalBaseDirTransferServer(t, mock, dir)
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/log.txt",
+			"local_path":  dir + "/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "download inside local_base_dir must not set isError")
+	require.True(t, mock.downloadCalled, "DownloadFile must be called for in-sandbox local path")
+}
+
+// TestDownloadLocalBaseDirOutsidePathRejected verifies that ssh_download_file
+// returns IsError:true when local_path is outside local_base_dir and that no SSH
+// I/O happens. This is the case the allow_overwrite stat cannot cover, because the
+// target file does not exist yet.
+func TestDownloadLocalBaseDirOutsidePathRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/keys.txt",
+			"local_path":  t.TempDir() + "/authorized_keys",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "download outside local_base_dir must set isError")
+	require.False(t, mock.downloadCalled, "DownloadFile must NOT be called when local path is outside local_base_dir")
+	require.False(t, mock.runCalled, "RunCommand must NOT be called before the local_base_dir guard")
+
+	require.NotEmpty(t, result.Content)
+	text, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	require.Contains(t, text.Text, "outside local_base_dir", "error must state the path is outside local_base_dir")
+	require.Contains(t, text.Text, "/srv/out", "error must name the local_base_dir")
+	require.NotContains(t, text.Text, "[host ", "local-side policy error must not carry a host prefix")
+}
+
+// TestDownloadLocalBaseDirTraversalRejected verifies that a local_path using ../
+// to escape local_base_dir is rejected (traversal attack).
+func TestDownloadLocalBaseDirTraversalRejected(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "/srv/out")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/keys.txt",
+			"local_path":  "/srv/out/../../etc/passwd",
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "download with traversal escaping local_base_dir must set isError")
+	require.False(t, mock.downloadCalled, "DownloadFile must NOT be called for a traversal local path")
+}
+
+// TestDownloadLocalBaseDirEmptyUnchanged verifies that download behaviour is
+// unchanged when local_base_dir is empty (opt-in: no guard applied).
+func TestDownloadLocalBaseDirEmptyUnchanged(t *testing.T) {
+	mock := &toolsMockExecutor{}
+	cs := newLocalBaseDirTransferServer(t, mock, "")
+
+	result, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ssh_download_file",
+		Arguments: map[string]any{
+			"remote_path": "/remote/keys.txt",
+			"local_path":  t.TempDir() + "/dest.txt",
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, "download with empty local_base_dir must not set isError (no guard)")
+	require.True(t, mock.downloadCalled, "DownloadFile must be called when local_base_dir is empty")
+}

@@ -50,3 +50,36 @@ func isDestructiveCommand(cmd string) (string, bool) {
 	}
 	return "", false
 }
+
+// shellControlChars is the set of characters that let a caller chain, redirect,
+// or substitute additional commands into a shell invocation. They are rejected
+// when a host has a non-empty exec_allowlist, because a prefix match alone does
+// not constrain anything a caller appends after the allowed prefix.
+//
+// Characters common in ordinary arguments (globs, braces, quotes, paths, flags)
+// are deliberately NOT included.
+var shellControlChars = map[rune]struct{}{
+	';':  {},
+	'&':  {},
+	'|':  {},
+	'$':  {},
+	'`':  {},
+	'(':  {},
+	')':  {},
+	'<':  {},
+	'>':  {},
+	'\n': {},
+	'\r': {},
+}
+
+// containsShellControlChars reports whether cmd contains any shell control
+// character. It returns the first offending character and true, or ("", false)
+// when the command is free of them.
+func containsShellControlChars(cmd string) (string, bool) {
+	for _, r := range cmd {
+		if _, ok := shellControlChars[r]; ok {
+			return string(r), true
+		}
+	}
+	return "", false
+}

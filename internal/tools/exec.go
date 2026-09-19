@@ -96,6 +96,21 @@ func execHandler(registry map[string]ssh.SSHExecutor, cfg *config.Config) mcp.To
 					}},
 				}, ExecOutput{}, nil
 			}
+			// A prefix match only constrains the start of the command: shell
+			// metacharacters would let the caller append arbitrary commands after
+			// an allowed prefix. Reject control characters so the allowlist is a
+			// real restriction.
+			if char, bad := containsShellControlChars(in.Command); bad {
+				return &mcp.CallToolResult{
+					IsError: true,
+					Content: []mcp.Content{&mcp.TextContent{
+						Text: fmt.Sprintf(
+							"[host %s] command rejected: shell control character %q is not permitted when exec_allowlist is configured",
+							hostName, char,
+						),
+					}},
+				}, ExecOutput{}, nil
+			}
 		}
 
 		// BDIR-02/T-10-08 (D-01): when base_dir is set, cwd must not be empty.

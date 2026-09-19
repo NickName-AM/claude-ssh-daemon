@@ -70,6 +70,11 @@ type Config struct {
 	// v2.0 multi-host fields (D-01)
 	Hosts       map[string]HostConfig `json:"hosts,omitempty"`
 	DefaultHost string                `json:"default_host,omitempty"`
+	// LocalBaseDir confines the LOCAL side of ssh_upload_file / ssh_download_file.
+	// Opt-in: empty or absent means the local path is unconfined (existing
+	// behaviour). If non-empty it must be an absolute path; cleaned at Validate()
+	// time so downstream handlers always receive a canonical value.
+	LocalBaseDir string `json:"local_base_dir,omitempty"`
 	// Unchanged
 	MCPSocket    string       `json:"mcp_socket"`
 	Capabilities Capabilities `json:"capabilities"`
@@ -113,7 +118,8 @@ func loadFromPath(path string) (*Config, error) {
 //  2. Multi-host resolution — len(c.Hosts) == 0 (NOT c.Hosts == nil, Pitfall 7):
 //     - Empty/absent: auto-seed hosts["default"] from legacy fields (MHST-03, D-03)
 //     - Non-empty: validate per-host fields and default_host (MHST-04, D-05)
-//  3. Safeguards.Patterns compilation (unchanged; runs after host resolution)
+//  3. local_base_dir — optional; absolute-path check + filepath.Clean
+//  4. Safeguards.Patterns compilation (unchanged; runs after host resolution)
 //
 // After Validate() returns nil, c.Hosts is guaranteed non-empty and c.DefaultHost
 // names a valid key in c.Hosts. All downstream code reads from c.Hosts.
@@ -188,7 +194,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// 3. Compile Safeguards patterns (unchanged; runs after host resolution).
+	// 3. local_base_dir (opt-in, host-independent): when set it must be absolute.
+	// Cleaned with filepath.Clean — this is a path on the daemon's own machine,
+	// so local (OS) semantics apply, unlike the POSIX-only per-host base_dir.
+	if c.LocalBaseDir != "" {
+		if !filepath.IsAbs(c.LocalBaseDir) {
+			return fmt.Errorf("config: local_base_dir must be an absolute path, got %q", c.LocalBaseDir)
+		}
+		c.LocalBaseDir = filepath.Clean(c.LocalBaseDir)
+	}
+
+	// 4. Compile Safeguards patterns (unchanged; runs after host resolution).
 	// Reset before appending so repeated Validate() calls are idempotent.
 	c.Safeguards.CompiledPatterns = nil
 	for i, pat := range c.Safeguards.Patterns {

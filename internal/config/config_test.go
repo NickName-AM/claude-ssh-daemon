@@ -644,6 +644,69 @@ func TestBaseDirValidation(t *testing.T) {
 	})
 }
 
+// TestLocalBaseDirValidation covers local_base_dir validation in Validate():
+// absolute paths are accepted and cleaned, relative paths are rejected, and an
+// absent key leaves the field empty.
+func TestLocalBaseDirValidation(t *testing.T) {
+	makeCfg := func(localBaseDir string) Config {
+		return Config{
+			MCPSocket: "/tmp/mcp.sock",
+			Hosts: map[string]HostConfig{
+				"web": {Socket: "/tmp/web.sock", User: "ubuntu", Host: "web.example.com"},
+			},
+			DefaultHost:  "web",
+			LocalBaseDir: localBaseDir,
+		}
+	}
+
+	t.Run("non-absolute local_base_dir is rejected with exact error", func(t *testing.T) {
+		cfg := makeCfg("relative/out")
+		err := cfg.Validate()
+		require.EqualError(t, err, `config: local_base_dir must be an absolute path, got "relative/out"`)
+	})
+
+	t.Run("absolute local_base_dir is accepted and cleaned", func(t *testing.T) {
+		cfg := makeCfg("/srv/out//sub/")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "/srv/out/sub", cfg.LocalBaseDir,
+			"double slash and trailing slash must be normalised by filepath.Clean")
+	})
+
+	t.Run("canonical absolute path is accepted unchanged", func(t *testing.T) {
+		cfg := makeCfg("/srv/out")
+		require.NoError(t, cfg.Validate())
+		require.Equal(t, "/srv/out", cfg.LocalBaseDir)
+	})
+
+	t.Run("absent local_base_dir defaults to empty with no error", func(t *testing.T) {
+		data := `{
+			"mcp_socket": "/tmp/mcp.sock",
+			"default_host": "web",
+			"hosts": {
+				"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com"}
+			}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.Equal(t, "", cfg.LocalBaseDir,
+			"absent local_base_dir must leave the field empty (unconfined, opt-in)")
+	})
+
+	t.Run("local_base_dir parsed from JSON is cleaned", func(t *testing.T) {
+		data := `{
+			"mcp_socket": "/tmp/mcp.sock",
+			"local_base_dir": "/srv/out/",
+			"default_host": "web",
+			"hosts": {
+				"web": {"socket": "/tmp/ssh-web.sock", "user": "ubuntu", "host": "web.example.com"}
+			}
+		}`
+		cfg, err := loadFromPath(writeTemp(t, data))
+		require.NoError(t, err)
+		require.Equal(t, "/srv/out", cfg.LocalBaseDir)
+	})
+}
+
 // TestLegacyBackwardCompatNewFields verifies that a legacy auto-seeded config
 // and a multi-host config that omit exec_allowlist and base_dir both load without
 // errors and default the new fields to nil and "" respectively.
